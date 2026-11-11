@@ -48,11 +48,6 @@ export function makeCamera(player, prev, dt) {
   };
 }
 
-export const pickTrickPose = (rng) => {
-  const t = CFG.character.tricks;
-  return t[Math.min(t.length - 1, Math.floor(rng() * t.length))];
-};
-
 // ---- precomputed once at load; per-frame drawing allocates only the camera/view objects ----
 const rgb = (c) => `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
 const mix = (a, b, p) => a.map((v, i) => v + (b[i] - v) * p);

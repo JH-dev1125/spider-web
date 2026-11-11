@@ -3,7 +3,11 @@ import { CFG } from './config.js';
 import { makeRng, difficulty, createWorld, updateWorld } from './world.js';
 import { createPlayer, attach, stepPlayer } from './player.js';
 import { aimVector, chargeLength, castWeb } from './web.js';
-import { pickTrickPose } from './render.js';
+
+export const pickTrickPose = (rng) => {
+  const t = CFG.character.tricks;
+  return t[Math.min(t.length - 1, Math.floor(rng() * t.length))];
+};
 
 export function createGame(seed) {
   const g = {
@@ -40,7 +44,7 @@ function fall(p, dt) {
   if (p.pos.y === 0) v.x = v.y = v.z = 0;
 }
 
-// shots: [{side, level, heldSec}]. Returns stepPlayer's events ('released', 'bounce', 'dead').
+// shots: [{side, level, heldSec}]. Returns stepPlayer's events ('bottom', 'released', 'bounce', 'dead').
 export function stepGame(g, dt, shots) {
   dt = Math.min(dt, CFG.maxDt);
   const p = g.player;
@@ -51,10 +55,8 @@ export function stepGame(g, dt, shots) {
     const diff = difficulty(g.elapsed);
     updateWorld(g.world, p.pos.z, g.elapsed, g.rng);
     for (const s of shots) fire(g, s);
-    const wasDescending = p.swingPhase === 'descending';
     events = stepPlayer(p, dt, g.world.buildings, diff.speed);
-    // swing bottom: descending -> ascending, or straight to released when the bottom also trips auto-release
-    if (wasDescending && (p.swingPhase === 'ascending' || events.includes('released'))) g.shake = CFG.render.shakePeak;
+    if (events.includes('bottom')) g.shake = CFG.render.shakePeak;
     if (events.includes('bounce')) g.shake = Math.max(g.shake, CFG.render.bounceShake);
     if (events.includes('released')) { g.pose = pickTrickPose(g.rng); g.trickSec = CFG.trickSec; }
   } else fall(p, dt);

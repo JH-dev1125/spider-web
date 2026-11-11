@@ -32,8 +32,8 @@ export function detach(p) {
   p.swingPhase = 'none';
 }
 
-// Rope constraint, phase tracking and auto-release. Returns true if released.
-function swing(p, dt) {
+// Rope constraint, phase tracking and auto-release. Pushes 'bottom' and 'released' into events.
+function swing(p, dt, events) {
   const { pos, vel, anchor: a } = p;
   const d = { x: pos.x - a.x, y: pos.y - a.y, z: pos.z - a.z };
   const len = Math.hypot(d.x, d.y, d.z);
@@ -48,7 +48,10 @@ function swing(p, dt) {
   p.swingSec += dt;
   if (vel.y <= 0) p.sawDescent = true;
   // ascending only after passing the lowest point (spec 5.3)
-  if (p.swingPhase === 'descending' && p.sawDescent && vel.y > 0) p.swingPhase = 'ascending';
+  if (p.swingPhase === 'descending' && p.sawDescent && vel.y > 0) {
+    p.swingPhase = 'ascending';
+    events.push('bottom');
+  }
   // rope angle from vertical, positive when the anchor is behind the player (z)
   const backDeg = Math.atan2(pos.z - a.z, a.y - pos.y) / RAD;
   const done = p.swingPhase === 'ascending' && (vel.y <= 0 || backDeg > CFG.autoReleaseBackAngleDeg);
@@ -56,9 +59,8 @@ function swing(p, dt) {
     vel.y += CFG.releaseBoostUp;
     vel.z += CFG.releaseBoostForward;
     detach(p);
-    return true;
+    events.push('released');
   }
-  return false;
 }
 
 export function stepPlayer(p, dt, buildings, minForwardSpeed) {
@@ -74,7 +76,7 @@ export function stepPlayer(p, dt, buildings, minForwardSpeed) {
   // Walls before the rope: anchors sit on the face plane, so the rope projection
   // only pulls toward |x| = W and can never push back through the wall.
   const W = CFG.corridorHalfWidth;
-  if (Math.abs(pos.x) >= W) {
+  if (Math.abs(pos.x) >= W - CFG.wallSkin) {
     const s = Math.sign(pos.x);
     const side = s > 0 ? 'R' : 'L';
     const wall = buildings.some((b) => b.side === side && pos.z >= b.z0 && pos.z <= b.z1 && pos.y < b.h);
@@ -84,8 +86,11 @@ export function stepPlayer(p, dt, buildings, minForwardSpeed) {
       if (out > CFG.bounceMinSpeed) {
         vel.x = -vel.x * CFG.wallBounceLoss;
         events.push('bounce');
+      } else if (!p.anchor) {
+        // free flight never sticks to a face, or every same-side web would be too short (spec 1.1)
+        vel.x = -s * Math.max(CFG.wallPushOff, -out);
       } else if (out > 0) vel.x = 0; // slow contact (rope drag): slide along the face
-    } else {
+    } else if (Math.abs(pos.x) >= W) {
       pos.x = s * W;
       if (out > 0) vel.x = 0;
     }
@@ -94,7 +99,7 @@ export function stepPlayer(p, dt, buildings, minForwardSpeed) {
     pos.y = CFG.ceiling;
     vel.y = Math.min(vel.y, 0);
   }
-  if (p.anchor && swing(p, dt)) events.push('released');
+  if (p.anchor) swing(p, dt, events);
   vel.z = Math.max(vel.z, minForwardSpeed);
   if (pos.y <= 0) {
     p.alive = false;

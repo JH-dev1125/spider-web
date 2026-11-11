@@ -158,25 +158,33 @@ test('(g) ceiling caps height', () => {
   }
 });
 
-test('anchor closer than minRopeLen is refused; wall-slide web spam gains nothing', () => {
-  const face = [{ side: 'R', z0: -50, z1: 400, h: 110 }];
+test('anchor closer than minRopeLen is refused; free flight pushes off the face; web spam cannot hover', () => {
+  const face = [{ side: 'R', z0: -50, z1: 4000, h: 110 }];
   const cast = (level) => castWeb(p.pos, aimVector('R', level), CFG.chargeMax, face);
   const p = createPlayer();
   p.pos.x = W - CFG.wallSkin;
-  const y0 = p.pos.y;
   assert.ok(cast('mid'));
   assert.equal(attach(p, cast('mid')), false);
   assert.equal(p.anchor, null);
+  stepPlayer(p, DT, face, V);
+  assert.equal(p.vel.x, -CFG.wallPushOff); // not glued to the face
   let dead = false;
-  for (let t = 0; t < 5 && !dead; t += DT) {
+  for (let t = 0; t < 20 && !dead; t += DT) {
     for (const level of ['hi', 'mid', 'lo']) {
       const a = !p.anchor && cast(level);
-      if (a && attach(p, a)) assert.ok(false, `${level} attached at ${p.pos.x}`);
+      if (a) attach(p, a);
     }
     dead = stepPlayer(p, DT, face, V).includes('dead');
-    assert.ok(p.pos.y <= y0);
   }
-  assert.ok(dead);
+  assert.ok(dead, 'spamming short webs on one face must not keep the player up');
+});
+
+test('swing emits one bottom event, before release', () => {
+  const p = createPlayer();
+  attach(p, webFrom(p, 'R', 'mid'));
+  const evs = [];
+  for (let i = 0; i < 600 && !evs.includes('released'); i++) evs.push(...stepPlayer(p, DT, towers, V));
+  assert.deepEqual(evs.filter((e) => e === 'bottom' || e === 'released'), ['bottom', 'released']);
 });
 
 test('attach returns true for a normal anchor', () => {
@@ -190,7 +198,9 @@ test('failsafe: rope released after maxSwingSec even if the swing never ascends'
   attach(p, { x: 0, y: CFG.startHeight + 10, z: 0 }); // dead hang, no forward push
   let tReleased = null;
   for (let t = 0; t < CFG.maxSwingSec + 1 && tReleased === null; t += DT) {
-    if (stepPlayer(p, DT, [], 0).includes('released')) tReleased = t;
+    const ev = stepPlayer(p, DT, [], 0);
+    assert.ok(!ev.includes('bottom'), 'no bottom while the swing never ascends');
+    if (ev.includes('released')) tReleased = t;
   }
   assert.ok(tReleased !== null && tReleased <= CFG.maxSwingSec + DT, `released at ${tReleased}`);
 });

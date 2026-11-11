@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG } from '../src/config.js';
-import { createGame, stepGame, createBot } from '../src/game.js';
+import { createGame, stepGame, createBot, pickTrickPose } from '../src/game.js';
+import { aimVector, castWeb } from '../src/web.js';
+import { makeRng } from '../src/world.js';
 
 const DT = 1 / 60;
 const shot = (side, level, heldSec = CFG.chargeFullSec) => ({ side, level, heldSec });
@@ -62,20 +64,58 @@ test('shake kicks in at the swing bottom and decays', () => {
   assert.ok(g.shake < peak * 0.1);
 });
 
-test('never firing dies within 10 s; one dead event; the body then rests on the street', () => {
-  const g = createGame(7);
-  let deaths = 0, t = 0;
-  for (; t < 10 && g.player.alive; t += DT) deaths += stepGame(g, DT, []).filter((e) => e === 'dead').length;
-  assert.equal(g.player.alive, false);
-  assert.ok(t < 10);
-  for (let i = 0; i < 60; i++) deaths += stepGame(g, DT, []).filter((e) => e === 'dead').length;
-  assert.equal(deaths, 1);
-  const z = g.player.pos.z;
-  stepGame(g, DT, [shot('R', 'mid')]); // shots after death do nothing
-  assert.equal(g.player.anchor, null);
-  assert.equal(g.player.pos.y, 0); // resting on the street, not sliding on or sinking
-  assert.equal(g.player.pos.z, z);
-  assert.equal(g.pose, 'fall');
+test('never firing dies within 10 s on every seed; one dead event; the body then rests on the street', () => {
+  for (const seed of [7, 8, 9, 10, 11, 12, 13, 14]) {
+    const g = createGame(seed);
+    let deaths = 0, t = 0;
+    for (; t < 10 && g.player.alive; t += DT) deaths += stepGame(g, DT, []).filter((e) => e === 'dead').length;
+    assert.equal(g.player.alive, false, `seed ${seed}`);
+    assert.ok(t < 10);
+    for (let i = 0; i < 60; i++) deaths += stepGame(g, DT, []).filter((e) => e === 'dead').length;
+    assert.equal(deaths, 1);
+    const z = g.player.pos.z;
+    stepGame(g, DT, [shot('R', 'mid')]); // shots after death do nothing
+    assert.equal(g.player.anchor, null);
+    assert.equal(g.player.pos.y, 0); // resting on the street, not sliding on or sinking
+    assert.equal(g.player.pos.z, z);
+    assert.equal(g.pose, 'fall');
+  }
+});
+
+// Spec 1.1: choosing which building matters, so a swing must not leave the same-side wall unusable.
+// Before the wall push-off ~20% of swings glued the player to the face (every same-side web too short).
+test('after a swing on side S, a same-side web becomes attachable within 1 s on >= 95% of seeds', () => {
+  const sameSideOk = (g, side) => ['hi', 'mid', 'lo'].some((lv) => {
+    const p = g.player;
+    const hit = castWeb(p.pos, aimVector(side, lv), CFG.chargeMax, g.world.buildings);
+    return hit && Math.hypot(hit.x - p.pos.x, hit.y - p.pos.y, hit.z - p.pos.z) >= CFG.minRopeLen;
+  });
+  for (const [level, heldSec] of [['mid', 1], ['hi', CFG.botChargeSec]]) {
+    let n = 0, ok = 0;
+    for (let seed = 101; seed <= 140; seed++) {
+      const side = seed % 2 ? 'R' : 'L';
+      const g = createGame(seed);
+      for (let t = 0; t < CFG.botChargeSec; t += DT) stepGame(g, DT, []);
+      stepGame(g, DT, [shot(side, level, heldSec)]);
+      if (!g.player.anchor) continue;
+      let rel = false;
+      for (let i = 0; i < 600 && !rel && g.player.alive; i++) rel = stepGame(g, DT, []).includes('released');
+      if (!rel || !g.player.alive) continue;
+      n++;
+      let can = false;
+      for (let t = 0; t < 1 && g.player.alive && !can; t += DT) { can = sameSideOk(g, side); stepGame(g, DT, []); }
+      if (can) ok++;
+    }
+    assert.ok(n >= 25, `${level}: only ${n} swings completed`);
+    assert.ok(ok >= n * 0.95, `${level}: same-side attach possible on ${ok}/${n}`);
+  }
+});
+
+test('pickTrickPose returns only trick poses and covers all of them', () => {
+  const rng = makeRng(7);
+  const seen = new Set();
+  for (let i = 0; i < 200; i++) seen.add(pickTrickPose(rng));
+  assert.deepEqual([...seen].sort(), ['glide', 'roll', 'tuck']);
 });
 
 // The bot is blind (it alternates even when sliding on a wall), so a few seeds still lose; require 90%.

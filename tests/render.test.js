@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG } from '../src/config.js';
-import { project, makeCamera, pickTrickPose } from '../src/render.js';
+import { project, makeCamera } from '../src/render.js';
 import { createPlayer } from '../src/player.js';
 import { makeRng } from '../src/world.js';
 
@@ -68,13 +68,6 @@ test('camera smoothing: partial step, frame-rate independent', () => {
   assert.ok(one.y > prev.y && one.z > prev.z);
   const twoSteps = makeCamera(p, makeCamera(p, prev, 1 / 60), 1 / 60);
   for (const k of ['x', 'y', 'z']) assert.ok(Math.abs(twoSteps[k] - one[k]) < 1e-9);
-});
-
-test('pickTrickPose returns only trick poses and covers all of them', () => {
-  const rng = makeRng(7);
-  const seen = new Set();
-  for (let i = 0; i < 200; i++) seen.add(pickTrickPose(rng));
-  assert.deepEqual([...seen].sort(), ['glide', 'roll', 'tuck']);
 });
 
 // Recording stub: every method records its numeric args; gradients return the stub itself.

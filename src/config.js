@@ -23,7 +23,7 @@ export const CFG = deepFreeze({
   gapMaxEnd: 40,
   lenMin: 30,
   lenMax: 80,
-  hMinStartFactor: 1.4, // Task 7 (was 0.8): early towers clear a 'hi' shot fired from the opposite wall
+  hMinStartFactor: 0.9, // Task 7 fix 1: was 0.8 (1.4 in round 0)
   hMinEndFactor: 0.5,
   hMaxFactor: 0.9,
   aimYawDeg: 55, // Task 7 (was 40): a ~0.6 s charge must reach the far wall after a swing leaves you on the near one
@@ -39,6 +39,7 @@ export const CFG = deepFreeze({
   wallBounceLoss: 0.5,
   wallSkin: 0.05,
   bounceMinSpeed: 2,
+  wallPushOff: 10, // m/s inward when free flight touches a face slower than bounceMinSpeed
   autoReleaseBackAngleDeg: 35,
   missShowSec: 0.25,
   // game flow
