@@ -26,6 +26,8 @@ export const CFG = deepFreeze({
   hMinStartFactor: 0.8,
   hMinEndFactor: 0.5,
   hMaxFactor: 0.9,
+  aimYawDeg: 40,
+  aimPitchDeg: { hi: 35, mid: 0, lo: -35 },
   chargeMin: 12,
   chargeMax: 70,
   chargeFullSec: 1.0,
