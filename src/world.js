@@ -1,16 +1,22 @@
 import { CFG } from './config.js';
 
 // mulberry32
+const STEP = 0x6D2B79F5;
+const mix01 = (a) => {
+  let t = a;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+};
 export const makeRng = (seed) => {
   let a = seed >>> 0;
   return () => {
-    a = (a + 0x6D2B79F5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    a = (a + STEP) >>> 0;
+    return mix01(a);
   };
 };
+// Allocation-free stateless hash: hash01(n) === makeRng(n)(), any integer n (negatives wrap mod 2^32).
+export const hash01 = (n) => mix01(((n >>> 0) + STEP) >>> 0);
 
 const lerp = (a, b, p) => a + (b - a) * p;
 

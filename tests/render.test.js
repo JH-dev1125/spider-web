@@ -76,3 +76,56 @@ test('pickTrickPose returns only trick poses and covers all of them', () => {
   for (let i = 0; i < 200; i++) seen.add(pickTrickPose(rng));
   assert.deepEqual([...seen].sort(), ['glide', 'roll', 'tuck']);
 });
+
+// Recording stub: every method records its numeric args; gradients return the stub itself.
+function stubCtx() {
+  const nums = [];
+  const pts = [];
+  const ctx = new Proxy({}, {
+    get(o, k) {
+      if (k in o) return o[k];
+      return (...args) => {
+        for (const a of args) if (typeof a === 'number') nums.push([k, a]);
+        if (k === 'moveTo' || k === 'lineTo') pts.push(args);
+        return k === 'createLinearGradient' ? ctx : undefined;
+      };
+    },
+    set(o, k, v) { o[k] = v; return true; },
+  });
+  return { ctx, nums, pts };
+}
+
+test('drawFrame smoke: finite coords, nothing emitted from inside the near plane', async () => {
+  const { drawFrame } = await import('../src/render.js');
+  for (const pose of ['swing', 'glide', 'roll', 'tuck', 'fall']) {
+    for (const camY of [10, 200]) { // below and above roofs
+      const p = createPlayer();
+      p.pos.y = camY;
+      p.vel.z = CFG.maxSpeed; // speed lines on
+      const cam = makeCamera(p, null, 0);
+      p.anchor = { x: -CFG.corridorHalfWidth, y: camY + 10, z: cam.z - 3 }; // anchor behind the camera
+      const buildings = [
+        { side: 'L', z0: cam.z - 10, z1: cam.z + 30, h: 60 }, // straddles cam.z
+        { side: 'R', z0: cam.z + CFG.camNear * 0.5, z1: cam.z + 50, h: 120 }, // starts inside near plane
+        { side: 'R', z0: cam.z + 80, z1: cam.z + 140, h: 40 },
+        { side: 'L', z0: cam.z - 60, z1: cam.z - 20, h: 40 }, // fully behind
+      ];
+      const { ctx, nums, pts } = stubCtx();
+      drawFrame(ctx, W, H, {
+        player: p, buildings, cam, pose, t: 1.234, shake: 3,
+        aim: { side: 'R', level: 'lo', heldSec: 0.5 },
+        missLine: { to: { x: CFG.corridorHalfWidth, y: 0, z: cam.z - 5 }, age: 0.1 },
+      });
+      assert.ok(pts.length > 50, 'something was drawn');
+      // projectTo turns rejected points into NaN, so this also proves no dz <= camNear point reached a path
+      for (const [k, v] of nums) assert.ok(Number.isFinite(v), `${pose}/${camY}: ${k} got ${v}`);
+    }
+  }
+});
+
+test('project rejects at camNear and matches drawFrame focal length', () => {
+  const c = { x: 0, y: 0, z: 0, fovDeg: 90 };
+  assert.equal(project({ x: 0, y: 0, z: CFG.camNear }, c, W, H), null);
+  const p = project({ x: 1, y: 0, z: 1 }, c, W, H); // tan(45deg) = 1 -> focal = H/2
+  assert.ok(Math.abs(p.sx - (W / 2 + H / 2)) < 1e-9);
+});

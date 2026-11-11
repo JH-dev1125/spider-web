@@ -1,5 +1,5 @@
 import { CFG } from './config.js';
-import { makeRng } from './world.js';
+import { hash01 as hash } from './world.js';
 import { aimVector, chargeLength } from './web.js';
 import { drawCharacter } from './character.js';
 
@@ -8,13 +8,24 @@ const C = CFG.colors;
 const DEG = Math.PI / 180;
 const TAU = Math.PI * 2;
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
-const hash = (n) => makeRng(n)(); // deterministic 0..1 per integer
+
+const focal = (fovDeg, h) => (h * 0.5) / Math.tan(fovDeg * DEG * 0.5);
+
+// The one projection formula. Writes px/py/ps; on near-plane rejection they become NaN,
+// so any caller that emits a rejected point produces NaN instead of a stale coordinate.
+let px = 0, py = 0, ps = 0;
+function projectTo(x, y, z, cam, cx, cy, f) {
+  const dz = z - cam.z;
+  if (dz <= CFG.camNear) { px = py = ps = NaN; return false; }
+  ps = f / dz;
+  px = cx + (x - cam.x) * ps;
+  py = cy - (y - cam.y) * ps;
+  return true;
+}
 
 export function project(pt, cam, w, h) {
-  const dz = pt.z - cam.z;
-  if (dz <= CFG.camNear) return null;
-  const scale = (h * 0.5) / Math.tan(cam.fovDeg * DEG * 0.5) / dz;
-  return { sx: w * 0.5 + (pt.x - cam.x) * scale, sy: h * 0.5 - (pt.y - cam.y) * scale, scale };
+  if (!projectTo(pt.x, pt.y, pt.z, cam, w * 0.5, h * 0.5, focal(cam.fovDeg, h))) return null;
+  return { sx: px, sy: py, scale: ps };
 }
 
 export function makeCamera(player, prev, dt) {
@@ -42,7 +53,7 @@ export const pickTrickPose = (rng) => {
   return t[Math.min(t.length - 1, Math.floor(rng() * t.length))];
 };
 
-// ---- precomputed, allocation-free per frame ----
+// ---- precomputed once at load; per-frame drawing allocates only the camera/view objects ----
 const rgb = (c) => `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
 const mix = (a, b, p) => a.map((v, i) => v + (b[i] - v) * p);
 const fogRamp = (near) => Array.from({ length: R.fogSteps }, (_, i) => rgb(mix(near, C.faceFar, i / (R.fogSteps - 1))));
@@ -51,22 +62,16 @@ const LIT = fogRamp(C.windowLit);
 const SL_ANG = Float64Array.from({ length: R.speedLineCount }, (_, i) => hash(i) * TAU);
 const SL_OFF = Float64Array.from({ length: R.speedLineCount }, (_, i) => hash(i + R.speedLineCount));
 const NO_DASH = [];
+const LIT_DRAWS = 3; // hash values per skyline window
 const sorted = [];
 let gradH = -1;
 let skyGrad = null;
 let groundGrad = null;
 
-// frame state for the inline projector
+// per-frame state so hot loops project without allocating
 let W = 0, H = 0, CX = 0, CY = 0, F = 1, CAM = null;
-let px = 0, py = 0, ps = 0, segPs = 0; // segPs: scale at a segment's start (the hand)
-function pj(x, y, z) {
-  const dz = z - CAM.z;
-  if (dz <= CFG.camNear) return false;
-  ps = F / dz;
-  px = CX + (x - CAM.x) * ps;
-  py = CY - (y - CAM.y) * ps;
-  return true;
-}
+let segPs = 0; // scale at a segment's start (the hand)
+const pj = (x, y, z) => projectTo(x, y, z, CAM, CX, CY, F);
 function quad(ctx, x0, y0, z0, x1, y1, z1, x2, y2, z2, x3, y3, z3) {
   pj(x0, y0, z0); ctx.moveTo(px, py);
   pj(x1, y1, z1); ctx.lineTo(px, py);
@@ -132,12 +137,13 @@ function drawSkyline(ctx) {
   for (let side = 0; side < 2; side++) {
     const s = side ? 1 : -1;
     for (let u = scroll - L.colW, i = -1; u < W * 0.5; u += L.colW, i++) {
-      const rng = makeRng(((i - base) * layers.length + layers.length - 1) * 2 + side);
-      const hh = H * (L.hMin + (L.hMax - L.hMin) * rng());
+      const seed = ((i - base) * layers.length + layers.length - 1) * 2 + side;
+      const hh = H * (L.hMin + (L.hMax - L.hMin) * hash(seed)); // same height as the silhouette pass
       const x0 = s > 0 ? CX + u : CX - u - L.colW;
       for (let k = 0; k < R.skylineLitPerCol; k++) {
-        if (rng() > R.skylineLitChance) continue;
-        ctx.rect(x0 + rng() * (L.colW - R.skylineLitPx), CY - hh * rng(), R.skylineLitPx, R.skylineLitPx);
+        const j = (seed * R.skylineLitPerCol + k) * LIT_DRAWS; // own hash domain: [chance, x, y]
+        if (hash(-j) > R.skylineLitChance) continue;
+        ctx.rect(x0 + hash(-j - 1) * (L.colW - R.skylineLitPx), CY - hh * hash(-j - 2), R.skylineLitPx, R.skylineLitPx);
       }
     }
   }
@@ -220,12 +226,12 @@ function drawBuilding(ctx, b) {
   const rows = Math.max(1, Math.min(R.windowRowsMax, Math.floor(h / R.floorH)));
   const step = h / rows;
   const glass = step * R.windowFill;
-  const rng = makeRng(Math.floor(b.z0) * 2 + (s > 0 ? 1 : 0));
+  const bseed = (Math.floor(b.z0) * 2 + (s > 0 ? 1 : 0)) * R.windowRowsMax;
   for (let pass = 0; pass < 2; pass++) {
     ctx.fillStyle = pass ? LIT[fog] : C.windowDark;
     ctx.beginPath();
     for (let r = 0; r < rows; r++) {
-      const lit = rng() < R.windowLitChance;
+      const lit = hash(bseed + r) < R.windowLitChance; // stateless: both passes agree per row
       if (lit !== (pass === 1)) continue;
       const y0 = r * step + (step - glass) * 0.5;
       quad(ctx, xF, y0, zA, xF, y0 + glass, zA, xF, y0 + glass, z1, xF, y0, z1);
@@ -307,7 +313,7 @@ function drawSpeedLines(ctx, speed, t) {
 export function drawFrame(ctx, w, h, view) {
   const { player, cam, t } = view;
   W = w; H = h; CX = w * 0.5; CY = h * 0.5; CAM = cam;
-  F = CY / Math.tan(cam.fovDeg * DEG * 0.5);
+  F = focal(cam.fovDeg, h);
   drawSky(ctx);
   ctx.save();
   const sh = view.shake || 0;

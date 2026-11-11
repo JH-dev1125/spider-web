@@ -140,11 +140,11 @@ export const CFG = deepFreeze({
     },
     // [upper, lower-relative] rad, 0 = straight down, + = away from the body; scale = foreshortening
     poses: {
-      swing: { armL: [0.6, 0.5], armR: [2.9, 0.1], legL: [0.2, -0.6], legR: [0.1, -0.3], limbScale: 1, spin: 0 },
-      glide: { armL: [1.9, 0.15], armR: [1.9, 0.15], legL: [0.4, 0.1], legR: [0.4, 0.1], limbScale: 1, spin: 0 },
-      roll: { armL: [0.5, -1.7], armR: [0.5, -1.7], legL: [0.35, -1.2], legR: [0.35, -1.2], limbScale: 0.65, spin: 1 },
-      tuck: { armL: [0.5, -1.7], armR: [0.5, -1.7], legL: [0.35, -1.2], legR: [0.35, -1.2], limbScale: 0.65, spin: 0 },
-      fall: { armL: [2.6, 0.5], armR: [2.3, 0.3], legL: [0.6, -0.7], legR: [0.3, -0.4], limbScale: 1, spin: 0 },
+      swing: { armL: [0.6, 0.5], armR: [2.9, 0.1], legL: [0.2, -0.6], legR: [0.1, -0.3], limbScale: 1, spin: 0, flail: 0 },
+      glide: { armL: [1.9, 0.15], armR: [1.9, 0.15], legL: [0.4, 0.1], legR: [0.4, 0.1], limbScale: 1, spin: 0, flail: 0 },
+      roll: { armL: [0.5, -1.7], armR: [0.5, -1.7], legL: [0.35, -1.2], legR: [0.35, -1.2], limbScale: 0.65, spin: 1, flail: 0 },
+      tuck: { armL: [0.5, -1.7], armR: [0.5, -1.7], legL: [0.35, -1.2], legR: [0.35, -1.2], limbScale: 0.65, spin: 0, flail: 0 },
+      fall: { armL: [2.6, 0.5], armR: [2.3, 0.3], legL: [0.6, -0.7], legR: [0.3, -0.4], limbScale: 1, spin: 0, flail: 1 },
     },
     tricks: ['roll', 'tuck', 'glide'],
   },

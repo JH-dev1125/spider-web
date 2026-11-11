@@ -54,3 +54,13 @@ test('start area covered on both sides', () => {
   for (const side of ['L', 'R'])
     assert.ok(w.buildings.some((b) => b.side === side && b.z0 <= 40 && b.z1 >= 0));
 });
+
+test('hash01 matches makeRng first draw, handles negatives, stays in [0,1)', async () => {
+  const { hash01 } = await import('../src/world.js');
+  for (const n of [0, 1, 2, 99, -1, -7, -123456, 2 ** 31, -(2 ** 31)]) {
+    assert.equal(hash01(n), makeRng(n)());
+    const v = hash01(n);
+    assert.ok(v >= 0 && v < 1);
+  }
+  assert.notEqual(hash01(-1), hash01(1));
+});

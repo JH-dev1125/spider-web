@@ -31,7 +31,7 @@ export function drawCharacter(ctx, sx, sy, scale, pose, t) {
   ctx.lineCap = 'round';
   ctx.lineWidth = K.limbW;
 
-  const fl = pose === 'fall' ? K.flailAmp : 0;
+  const fl = P.flail ? K.flailAmp : 0;
   const wob = (i) => fl * Math.sin(t * K.flailSpeed + i);
   const ang = (a, i) => (fl ? [a[0] + wob(i), a[1] + wob(i + 1)] : a);
   const s = P.limbScale;
