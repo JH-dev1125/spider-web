@@ -41,6 +41,113 @@ export const CFG = deepFreeze({
   bounceMinSpeed: 2,
   autoReleaseBackAngleDeg: 35,
   missShowSec: 0.25,
+  // camera
+  camNear: 0.5,
+  camBack: 8.5,
+  camUp: 2.2,
+  camFollow: 7, // 1/s, exponential smoothing rate
+  fovMin: 62,
+  fovMax: 92,
+  fovFollow: 3,
+  maxDpr: 2,
+  // render
+  render: {
+    clipNear: 1, // geometry is clipped this far in front of the camera
+    skyline: [ // far -> near; parallax = px scrolled per metre of cam.z
+      { colW: 34, hMin: 0.03, hMax: 0.13, parallax: 0.04, color: '#5d6f9e' },
+      { colW: 52, hMin: 0.05, hMax: 0.22, parallax: 0.12, color: '#3a4572' },
+      { colW: 78, hMin: 0.08, hMax: 0.32, parallax: 0.3, color: '#232a4d' },
+    ],
+    skylineLitChance: 0.35,
+    skylineLitPerCol: 4,
+    skylineLitPx: 2,
+    streetLightSpacing: 14,
+    streetLightXs: [-62, -44, -26, -14, 14, 26, 44, 62],
+    streetLightMin: 1,
+    streetLightSize: 0.6,
+    carSpacing: 9,
+    carSpeed: 18,
+    carLanes: [-8, -3, 3, 8],
+    carGapChance: 0.55,
+    buildingDepth: 22,
+    floorH: 4,
+    windowRowsMax: 24,
+    windowColSpacing: 3.5,
+    windowColsMax: 24,
+    windowFill: 0.5, // fraction of each floor that is glass
+    windowLitChance: 0.6,
+    mullionW: 0.25,
+    mullionMaxPx: 5,
+    fogSteps: 8,
+    webWidth: 0.06,
+    webMinPx: 1.5,
+    webMaxPx: 5,
+    aimDash: [6, 6],
+    aimWidthPx: 2,
+    aimDotPx: 4,
+    playerHand: 0.9, // web leaves the hand ~0.9 m above the body centre
+    speedLineStart: 1.3, // * baseSpeed
+    speedLineFull: 2.4,
+    speedLineCount: 48,
+    speedLineRate: 1.6,
+    speedLineLen: 0.22, // fraction of the screen half-diagonal
+    speedLineInner: 0.45,
+    speedLineWidth: 2.5,
+    speedLineMinFrac: 0.3,
+    shakeFreqX: 47,
+    shakeFreqY: 61,
+    shakePeak: 7,
+    shakeDecay: 9,
+  },
+  colors: {
+    skyTop: '#0b1033',
+    skyMid: '#3a3f8f',
+    skyHorizon: '#f28a5b',
+    ground: '#07070f',
+    groundFar: '#251f3a',
+    street: '#14121f',
+    streetLight: '#ffcf7a',
+    carHead: '#fff2d0',
+    carTail: '#ff3b3b',
+    faceNear: [70, 78, 112],
+    faceFar: [150, 120, 160], // haze tint toward the horizon
+    roof: '#1b1f35',
+    endFace: '#2c3150',
+    windowLit: [255, 216, 138],
+    windowDark: '#10142a',
+    mullion: '#20253f',
+    skylineLit: '#ffd88a',
+    web: '#f4f4f8',
+    aim: 'rgba(255,255,255,0.85)',
+    speedLine: 'rgba(255,255,255,0.8)',
+    suitRed: '#d3162b',
+    suitDark: '#7a0b18',
+    suitBlack: '#121218',
+    lens: '#f4f6ff',
+  },
+  character: {
+    height: 1.8, // metres
+    minPx: 14,
+    rollSpeed: 9, // rad/s
+    flailSpeed: 14,
+    flailAmp: 0.5,
+    limbW: 0.075, // fraction of height
+    // back view, unit = body height, y down, origin = body centre
+    body: {
+      headY: -0.37, headR: 0.085, torsoTop: -0.27, torsoBot: 0.06, torsoW: 0.2, waistW: 0.15,
+      shoulderX: 0.1, shoulderY: -0.23, hipX: 0.05, hipY: 0.05,
+      arm: [0.17, 0.16], leg: [0.22, 0.21], spineW: 0.035, panelW: 0.05, seamW: 0.008, lensW: 0.18, lensH: 0.32,
+    },
+    // [upper, lower-relative] rad, 0 = straight down, + = away from the body; scale = foreshortening
+    poses: {
+      swing: { armL: [0.6, 0.5], armR: [2.9, 0.1], legL: [0.2, -0.6], legR: [0.1, -0.3], limbScale: 1, spin: 0 },
+      glide: { armL: [1.9, 0.15], armR: [1.9, 0.15], legL: [0.4, 0.1], legR: [0.4, 0.1], limbScale: 1, spin: 0 },
+      roll: { armL: [0.5, -1.7], armR: [0.5, -1.7], legL: [0.35, -1.2], legR: [0.35, -1.2], limbScale: 0.65, spin: 1 },
+      tuck: { armL: [0.5, -1.7], armR: [0.5, -1.7], legL: [0.35, -1.2], legR: [0.35, -1.2], limbScale: 0.65, spin: 0 },
+      fall: { armL: [2.6, 0.5], armR: [2.3, 0.3], legL: [0.6, -0.7], legR: [0.3, -0.4], limbScale: 1, spin: 0 },
+    },
+    tricks: ['roll', 'tuck', 'glide'],
+  },
   keys: {
     KeyQ: ['L', 'hi'], KeyA: ['L', 'mid'], KeyZ: ['L', 'lo'],
     KeyE: ['R', 'hi'], KeyD: ['R', 'mid'], KeyC: ['R', 'lo'],
