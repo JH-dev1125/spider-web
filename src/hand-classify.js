@@ -19,6 +19,12 @@ export function classifyHand(lms, handedness) {
   return { gesture, side: w.x < 0.5 ? 'L' : 'R', level: w.y < hi ? 'hi' : w.y < mid ? 'mid' : 'lo' };
 }
 
+const GESTURE_KO = { shoot: '발사', fist: '주먹', open: '손바닥', none: '없음' };
+const LEVEL_KO = { hi: '위', mid: '가운데', lo: '아래' };
+// Status line text for the HUD: st = createHandController status (or null).
+export const handStatusText = (st) => !st || !st.hands ? '손 없음'
+  : `${GESTURE_KO[st.gesture] ?? '없음'} · ${st.side === 'L' ? '왼' : '오'} · ${LEVEL_KO[st.level] ?? '가운데'}`;
+
 // Returns the last gesture seen `frames` times in a row ('none' until then).
 export function createGestureGate(frames) {
   let stable = 'none', cand = null, n = 0;

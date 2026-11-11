@@ -28,9 +28,9 @@ function fire(g, s) {
   const p = g.player;
   const dir = aimVector(s.side, s.level);
   const len = chargeLength(s.heldSec);
-  const hit = castWeb(p.pos, dir, len, g.world.buildings);
+  const o = { x: p.pos.x, y: p.pos.y + CFG.render.playerHand, z: p.pos.z }; // same origin as the aim preview
+  const hit = castWeb(o, dir, len, g.world.buildings);
   if (hit && attach(p, hit)) { g.missLine = null; return; }
-  const o = p.pos;
   g.missLine = { to: { x: o.x + dir.x * len, y: o.y + dir.y * len, z: o.z + dir.z * len }, age: 0 };
 }
 

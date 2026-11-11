@@ -60,6 +60,7 @@ export const CFG = deepFreeze({
   handStableFrames: 3, // same gesture this many frames in a row before it counts
   handLostMs: 300, // hand unseen this long while charging = cancel
   handLevelCuts: [1 / 3, 2 / 3], // wrist y (0 = top) below these: hi, mid; else lo
+  handPromptTimeoutSec: 15, // camera permission prompt nobody answers = give up (hand 'failed', H retries)
   handRestartSec: 1, // open palm held this long on title/result = start
   handMatchMaxDist: 0.2, // wrist moved farther than this (screen fraction) between frames = a different hand
   // render

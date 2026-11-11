@@ -17,11 +17,12 @@ export async function startHand(video, tracker, now, opts = {}) {
   try {
     const { FilesetResolver, HandLandmarker } = await import(`${CDN}/vision_bundle.mjs`);
     const fileset = await FilesetResolver.forVisionTasks(`${CDN}/wasm`);
-    landmarker = await HandLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: MODEL },
+    const make = (delegate) => HandLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: MODEL, delegate },
       runningMode: 'VIDEO',
       numHands: 2,
     });
+    try { landmarker = await make('GPU'); } catch { landmarker = await make('CPU'); }
     video.srcObject = stream;
     await video.play();
   } catch (e) {

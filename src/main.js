@@ -3,6 +3,7 @@ import { createGame, stepGame, createBot } from './game.js';
 import { createChargeTracker } from './input-core.js';
 import { attachKeyboard } from './keyboard.js';
 import { startHand } from './hand.js';
+import { handStatusText } from './hand-classify.js';
 import { makeCamera, drawFrame } from './render.js';
 import { createScore } from './score.js';
 
@@ -49,13 +50,21 @@ const camEl = document.getElementById('cam');
 let hand = 'off'; // 'off' | 'loading' | 'on' | 'failed'
 let handStatus = null; // latest createHandController status
 let palmSec = 0; // open palm held on title/result
+const coarse = window.matchMedia?.('(pointer: coarse)').matches; // phone/tablet: no keyboard, no webcam game
+let attempt = 0;
 window.addEventListener('keydown', (e) => {
-  if (e.code !== 'KeyH' || e.repeat || mode !== 'title' || hand === 'loading' || hand === 'on') return;
+  if (e.code !== 'KeyH' || e.repeat || mode === 'play' || hand === 'loading' || hand === 'on') return;
   hand = 'loading';
+  const id = ++attempt;
+  const timer = setTimeout(() => { if (attempt === id) { attempt++; hand = 'failed'; } }, CFG.handPromptTimeoutSec * 1000);
   const onError = (err) => { console.warn('hand tracking stopped:', err); hand = 'failed'; handStatus = null; camEl.hidden = true; };
   startHand(camEl, tracker, now, { mode: 'shoot', onRelease: onShot, onFrame: (st) => { handStatus = st; }, onError })
-    .then(() => { hand = 'on'; camEl.hidden = false; })
-    .catch((err) => { console.warn('hand mode unavailable:', err); hand = 'failed'; });
+    .then((ctl) => {
+      clearTimeout(timer);
+      if (attempt !== id) { ctl.stop(); return; } // answered after the timeout: release the camera
+      hand = 'on'; camEl.hidden = false;
+    })
+    .catch((err) => { clearTimeout(timer); if (attempt === id) { console.warn('hand mode unavailable:', err); hand = 'failed'; } });
 });
 
 function start() {
@@ -71,9 +80,10 @@ window.addEventListener('keydown', (e) => {
   if (e.code !== 'Space' && e.code !== 'Enter') return;
   e.preventDefault();
   if (e.repeat) return;
-  if (mode === 'title' || (mode === 'over' && overSec >= CFG.overInputDelaySec)) start();
+  if (mode === 'title' || (mode === 'over' && overSec >= overGate)) start();
 });
 
+const overGate = Math.max(CFG.overInputDelaySec, CFG.overFallSec); // restart only after the result is on screen
 const H = CFG.hud;
 function lines(list) { // [text, px, color, bold] stacked around the screen centre
   const step = (px) => px * H.lineGap;
@@ -108,20 +118,23 @@ function drawHud() {
       ['WEB RUNNER', H.titlePx, H.color, true],
       ['왼쪽 Q · A · Z   /   오른쪽 E · D · C   (위 · 가운데 · 아래)', H.textPx, H.color],
       ['길게 누를수록 거미줄이 멀리 나갑니다', H.textPx, H.color],
-      ['Space: 키보드로 시작', H.hudPx, H.accent, true],
+      coarse ? ['PC(키보드/웹캠)에서 열어주세요', H.hudPx, H.accent, true] : ['Space: 키보드로 시작', H.hudPx, H.accent, true],
+      ['바닥에 닿으면 끝 · 스윙이 끝나면 줄이 끊겨요 — 다시 쏘세요', H.textPx, H.color],
+      hand === 'on' && ['발사: 검지·새끼만 펴고 유지 → 풀면 발사 (손 위치 = 방향)', H.textPx, H.color],
       {
         off: ['H: 손동작 켜기', H.textPx, H.color],
         loading: ['웹캠 준비 중…', H.textPx, H.dim],
         on: ['손동작 켜짐 · 손바닥을 1초 펴면 시작', H.textPx, H.accent],
-        failed: ['웹캠을 쓸 수 없어 키보드로 진행해', H.textPx, H.dim],
+        failed: ['웹캠을 쓸 수 없어 키보드로 진행합니다', H.textPx, H.dim],
       }[hand],
-    ]);
+    ].filter(Boolean));
   } else {
     lines([
       [`${result.distance} m`, H.titlePx, H.color, true],
       [result.newBest ? 'NEW BEST!' : `BEST ${score.best()} m`, H.hudPx, result.newBest ? H.accent : H.color, true],
       [hand === 'on' ? 'Space / Enter / 손바닥 1초: 다시 하기' : 'Space / Enter: 다시 하기', H.textPx, H.color],
-    ]);
+      hand !== 'on' && hand !== 'loading' && ['H: 손동작 켜기', H.textPx, H.dim],
+    ].filter(Boolean));
   }
 }
 
@@ -131,13 +144,12 @@ function drawHandStatus() { // text just above the mirrored preview (bottom-righ
   ctx.fillStyle = H.color;
   ctx.textAlign = 'right';
   ctx.textBaseline = 'bottom';
-  if (hand === 'failed') { // title already shows it in the menu
-    if (mode !== 'title') ctx.fillText('웹캠을 쓸 수 없어 키보드로 진행해', w - H.margin, h - H.margin);
+  if (hand === 'failed') { // title already shows it in the menu; hidden during play
+    if (mode === 'over') ctx.fillText('웹캠을 쓸 수 없어 키보드로 진행합니다', w - H.margin, h - H.margin);
     return;
   }
   const st = handStatus;
-  const text = !st || !st.hands ? '손 없음' : `${st.gesture} · ${st.side === 'L' ? '왼' : '오'} · ${st.level}`;
-  ctx.fillText(text, w - H.margin, camEl.getBoundingClientRect().top - H.margin);
+  ctx.fillText(handStatusText(st), w - H.margin, camEl.getBoundingClientRect().top - H.margin);
 }
 
 function update(dt) {

@@ -27,7 +27,7 @@ python -m http.server 8000
 - 발사 자세: 검지와 새끼손가락을 펴고, 중지와 약지는 접는다.
 - 손이 화면의 왼쪽 절반이면 왼쪽, 오른쪽 절반이면 오른쪽.
 - 손 높이(위/가운데/아래 세 구간)로 줄을 쏘는 높이를 고른다.
-- 자세를 오래 유지할수록 줄이 길어진다.
+- 자세를 오래 유지할수록 줄이 길어진다. 자세를 풀면(발사 자세가 끝나면) 줄이 발사된다.
 - 손바닥을 펴고 1초 유지하면 시작 / 다시 하기.
 
 웹캠은 HTTPS 또는 localhost에서만 동작한다. 영상은 이 PC 안에서만 처리되고 밖으로 나가지 않는다.
@@ -37,6 +37,7 @@ python -m http.server 8000
 1. GitHub에서 빈 저장소를 만든다.
 2. 이 폴더에서:
    ```
+   git checkout main && git merge dev   # 게임 코드는 dev에 있고, main에는 지금 문서만 있다
    git remote add origin https://github.com/<아이디>/<저장소>.git
    git push -u origin main
    ```
@@ -67,5 +68,7 @@ Node 22.15 이상 필요. (`npm test`도 같은 명령)
 | 줄 물리, 플레이어 움직임 | `src/web.js`, `src/player.js` |
 | 빌딩 생성 | `src/world.js` |
 | 점수 | `src/score.js` |
+| 줄 발사, 포즈, 죽을 때 추락 | `src/game.js` |
+| 키보드·손 입력 공통 충전 처리 / 키 입력 | `src/input-core.js`, `src/keyboard.js` |
 | 제목·결과 화면 글자 | `src/main.js` |
 | 손동작 판별 | `src/hand-classify.js`, `src/hand.js` |

@@ -147,3 +147,10 @@ test('controller: a hand far away does not inherit the charge of one that just v
   feed(ctrl, [hand(0.6, 0.5, OPEN)], 3, t);
   assert.equal(shots.length, 1);
 });
+
+import { handStatusText } from '../src/hand-classify.js';
+test('handStatusText: Korean labels', () => {
+  assert.equal(handStatusText(null), '손 없음');
+  assert.equal(handStatusText({ hands: 1, gesture: 'shoot', side: 'L', level: 'hi' }), '발사 · 왼 · 위');
+  assert.equal(handStatusText({ hands: 1, gesture: 'open', side: 'R', level: 'lo' }), '손바닥 · 오 · 아래');
+});

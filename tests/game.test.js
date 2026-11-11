@@ -60,6 +60,7 @@ test('shake kicks in at the swing bottom and decays', () => {
   let peak = 0;
   for (let i = 0; i < 300 && g.player.anchor; i++) { stepGame(g, DT, []); peak = Math.max(peak, g.shake); }
   assert.equal(peak, CFG.render.shakePeak);
+  g.player.alive = false; // no further bounces: isolate the decay itself
   for (let i = 0; i < 120; i++) stepGame(g, DT, []);
   assert.ok(g.shake < peak * 0.1);
 });
@@ -136,4 +137,13 @@ test('huge dt is clamped to maxDt (tab switch is not instant death)', () => {
   stepGame(g, 5, []);
   assert.equal(g.player.alive, true);
   assert.ok(g.elapsed <= CFG.maxDt + 1e-12);
+});
+
+test('a shot casts from the hand (pos.y + playerHand)', () => {
+  const g = createGame(1);
+  g.world.buildings = [];
+  g.world.nextZ = { L: Infinity, R: Infinity };
+  const y0 = g.player.pos.y;
+  stepGame(g, 0.0001, [shot('R', 'mid', 1)]);
+  assert.ok(Math.abs(g.missLine.to.y - (y0 + CFG.render.playerHand)) < 1);
 });
