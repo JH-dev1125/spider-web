@@ -1,8 +1,9 @@
 import { CFG } from './config.js';
-import { createWorld, updateWorld, makeRng } from './world.js';
-import { createPlayer, attach, stepPlayer } from './player.js';
-import { aimVector, castWeb } from './web.js';
-import { makeCamera, drawFrame, pickTrickPose } from './render.js';
+import { createGame, stepGame, createBot } from './game.js';
+import { createChargeTracker } from './input-core.js';
+import { attachKeyboard } from './keyboard.js';
+import { makeCamera, drawFrame } from './render.js';
+import { createScore } from './score.js';
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -19,60 +20,127 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-// Task 6 debug harness, replaced by Task 7 wiring.
-// ?debugPose=<pose> or keys 1-5 pick a pose; ?demo autopilots swings; ?t=<sec> fast-forwards the demo;
-// ?aim=R,hi shows a half-charged aim preview.
-const POSES = ['swing', 'glide', 'roll', 'tuck', 'fall'];
+// Debug: ?autoplay starts at once with the bot; ?autoplay=<sec> stops the bot after <sec> so it dies;
+// ?t=<sec> fast-forwards (see the bottom).
 const q = new URLSearchParams(location.search);
-let pose = q.get('debugPose') || 'glide';
-const demo = q.has('demo');
-const aimQ = q.get('aim')?.split(',');
-const aim = aimQ && { side: aimQ[0], level: aimQ[1], heldSec: 0.5 };
-window.addEventListener('keydown', (e) => {
-  const p = POSES[Number(e.key) - 1];
-  if (p) pose = p;
-});
+const autoplay = q.has('autoplay');
+const botSec = Number(q.get('autoplay')) || Infinity;
 
-const rng = makeRng(1);
-const world = createWorld();
-let player = createPlayer();
+let storage;
+try { storage = window.localStorage; } catch { /* blocked: score stays in memory */ }
+const score = createScore(storage);
+const tracker = createChargeTracker();
+const now = () => performance.now() / 1000;
+
+let mode = 'title'; // 'title' | 'play' | 'over'
+let g = createGame(Date.now());
 let cam = null;
-let elapsed = 0;
-let shake = 0;
-let side = 'R';
+let shots = [];
+let overSec = 0;
+let result = null;
+let bot = null;
 
-function step(dt) {
-  elapsed += dt;
-  updateWorld(world, player.pos.z, elapsed, rng);
-  if (demo) {
-    if (!player.anchor && player.vel.y < 0) { // fire on the way down
-      const o = { x: player.pos.x, y: player.pos.y, z: player.pos.z };
-      const hit = castWeb(o, aimVector(side, 'hi'), CFG.chargeMax, world.buildings);
-      if (hit && attach(player, hit)) side = side === 'R' ? 'L' : 'R';
-    }
-    const was = player.swingPhase;
-    const ev = stepPlayer(player, dt, world.buildings, CFG.baseSpeed);
-    if (was === 'descending' && player.swingPhase !== 'descending') shake = CFG.render.shakePeak; // bottom of the swing
-    if (ev.includes('released')) pose = pickTrickPose(rng);
-    if (player.anchor) pose = 'swing';
-    if (!player.alive) { player = createPlayer(); cam = null; }
-  }
-  shake *= Math.exp(-CFG.render.shakeDecay * dt);
-  cam = makeCamera(player, cam, dt);
+attachKeyboard(window, tracker, now, (shot) => { if (mode === 'play') shots.push(shot); });
+
+function start() {
+  g = createGame(Date.now());
+  cam = null;
+  shots = [];
+  tracker.cancel(); // a key held through death must not fire on the first frame
+  bot = autoplay ? createBot() : null;
+  mode = 'play';
 }
 
-const ff = Number(q.get('t')) || 0;
-for (let s = 0; s < ff; s += 1 / 60) step(1 / 60);
-step(0);
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' && e.code !== 'Enter') return;
+  e.preventDefault();
+  if (e.repeat) return;
+  if (mode === 'title' || (mode === 'over' && overSec >= CFG.overInputDelaySec)) start();
+});
 
-let last = performance.now();
-function frame(now) {
-  const dt = Math.min(CFG.maxDt, (now - last) / 1000);
-  last = now;
-  step(dt);
+const H = CFG.hud;
+function lines(list) { // [text, px, color, bold] stacked around the screen centre
+  const step = (px) => px * H.lineGap;
+  let y = (h - list.reduce((s, l) => s + step(l[1]), 0)) * 0.5;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  for (const [s, px, color, bold] of list) {
+    ctx.font = `${bold ? 'bold ' : ''}${px}px ${H.font}`;
+    ctx.fillStyle = color;
+    ctx.fillText(s, w * 0.5, y);
+    y += step(px);
+  }
+}
+
+function drawHud() {
+  ctx.textBaseline = 'top';
+  if (mode !== 'title') {
+    ctx.font = `bold ${H.hudPx}px ${H.font}`;
+    ctx.fillStyle = H.color;
+    ctx.textAlign = 'center';
+    ctx.fillText(`${mode === 'over' ? result.distance : Math.floor(g.player.pos.z)} m`, w * 0.5, H.margin);
+    ctx.font = `${H.textPx}px ${H.font}`;
+    ctx.textAlign = 'right';
+    ctx.fillText(`BEST ${score.best()} m`, w - H.margin, H.margin);
+  }
+  const showResult = mode === 'over' && overSec >= CFG.overFallSec;
+  if (mode === 'play' || (mode === 'over' && !showResult)) return;
+  ctx.fillStyle = H.backdrop;
+  ctx.fillRect(0, 0, w, h);
+  if (mode === 'title') {
+    lines([
+      ['WEB RUNNER', H.titlePx, H.color, true],
+      ['왼쪽 Q · A · Z   /   오른쪽 E · D · C   (위 · 가운데 · 아래)', H.textPx, H.color],
+      ['길게 누를수록 거미줄이 멀리 나갑니다', H.textPx, H.color],
+      ['Space: 키보드로 시작', H.hudPx, H.accent, true],
+      ['H: 손동작 켜기 (준비 중)', H.textPx, H.dim],
+    ]);
+  } else {
+    lines([
+      [`${result.distance} m`, H.titlePx, H.color, true],
+      [result.newBest ? 'NEW BEST!' : `BEST ${score.best()} m`, H.hudPx, result.newBest ? H.accent : H.color, true],
+      ['Space / Enter: 다시 하기', H.textPx, H.color],
+    ]);
+  }
+}
+
+function update(dt) {
+  if (mode === 'title') return;
+  if (bot && g.elapsed < botSec) shots.push(...bot(g, dt));
+  const events = stepGame(g, dt, shots);
+  shots = [];
+  if (mode === 'play' && events.includes('dead')) {
+    mode = 'over';
+    overSec = 0;
+    tracker.cancel();
+    const distance = Math.floor(g.player.pos.z);
+    result = { distance, newBest: score.submit(distance) };
+  } else if (mode === 'over') overSec += dt;
+}
+
+let last = now();
+function frame() {
+  const t = now();
+  const dt = Math.min(CFG.maxDt, t - last); // also keeps a tab switch from becoming one huge step
+  last = t;
+  update(dt);
+  cam = makeCamera(g.player, cam, dt);
   drawFrame(ctx, w, h, {
-    player, buildings: world.buildings, cam, aim, missLine: null, pose, t: elapsed, shake,
+    player: g.player,
+    buildings: g.world.buildings,
+    cam,
+    aim: mode === 'play' ? tracker.state(t) : null,
+    missLine: g.missLine,
+    pose: g.pose,
+    t,
+    shake: g.shake,
   });
+  drawHud();
   requestAnimationFrame(frame);
+}
+if (autoplay) {
+  start();
+  // ?t=<sec> fast-forwards the autoplay in maxDt steps (headless screenshots barely advance rAF)
+  for (let s = 0; s < (Number(q.get('t')) || 0); s += CFG.maxDt) { update(CFG.maxDt); cam = makeCamera(g.player, cam, CFG.maxDt); }
 }
 requestAnimationFrame(frame);

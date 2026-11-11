@@ -23,11 +23,11 @@ export const CFG = deepFreeze({
   gapMaxEnd: 40,
   lenMin: 30,
   lenMax: 80,
-  hMinStartFactor: 0.8,
+  hMinStartFactor: 1.4, // Task 7 (was 0.8): early towers clear a 'hi' shot fired from the opposite wall
   hMinEndFactor: 0.5,
   hMaxFactor: 0.9,
-  aimYawDeg: 40,
-  aimPitchDeg: { hi: 35, mid: 0, lo: -35 },
+  aimYawDeg: 55, // Task 7 (was 40): a ~0.6 s charge must reach the far wall after a swing leaves you on the near one
+  aimPitchDeg: { hi: 30, mid: 0, lo: -35 }, // Task 7: hi was 35 and overshot rooftops
   chargeMin: 12,
   chargeMax: 70,
   chargeFullSec: 1.0,
@@ -41,6 +41,11 @@ export const CFG = deepFreeze({
   bounceMinSpeed: 2,
   autoReleaseBackAngleDeg: 35,
   missShowSec: 0.25,
+  // game flow
+  trickSec: 0.6,
+  overFallSec: 1, // death fall animation before the result screen
+  overInputDelaySec: 0.3, // ignore Space/Enter right after dying so a held key can't skip the result
+  botChargeSec: 0.6, // ?autoplay and the headless bot test
   // camera
   camNear: 0.5,
   camBack: 8.5,
@@ -98,6 +103,19 @@ export const CFG = deepFreeze({
     shakeFreqY: 61,
     shakePeak: 7,
     shakeDecay: 9,
+    bounceShake: 3,
+  },
+  hud: {
+    font: 'system-ui, -apple-system, "Segoe UI", sans-serif',
+    titlePx: 72,
+    textPx: 20,
+    hudPx: 28,
+    margin: 16,
+    lineGap: 1.6, // line height as a multiple of the font size
+    color: '#ffffff',
+    dim: 'rgba(255,255,255,0.45)',
+    accent: '#ffd54a',
+    backdrop: 'rgba(5,6,20,0.55)',
   },
   colors: {
     skyTop: '#0b1033',
