@@ -31,11 +31,15 @@ export function createGestureGate(frames) {
 
 // Drives the shared charge tracker from per-frame hand results. update(hands, t):
 // hands = [{landmarks (mirrored), handedness}], t in seconds. The charge gesture is opts.mode.
-// Hands are matched to the previous frame's by wrist distance. With two hands, the one that entered
-// the charge gesture most recently owns the aim (like the keyboard's last-pressed key); the other's
-// release fires nothing.
+// Hands are matched to the previous frame's by wrist distance (up to CFG.handMatchMaxDist; farther is
+// a new hand). With two hands, the one that entered the charge gesture most recently owns the aim
+// (like the keyboard's last-pressed key); the other's release fires nothing.
+// Charging is judged on the RAW gesture: CFG.handStableFrames frames in a row of charge / not-charge
+// enter / leave it, so a flickering none/open while letting go cannot hold the release back.
+// update([], t) with no detection only ages hands out, so it can run on frames without a new image.
 export function createHandController(tracker, { mode = 'shoot', onRelease = () => {} } = {}) {
-  let slots = []; // {wrist, gate, stable, cur: classification, seen}
+  const N = CFG.handStableFrames;
+  let slots = []; // {wrist, gate, stable, cur: classification, seen, charging, on, run}
   let active = null;
   return { update(hands, t) {
     const cls = hands.map((h) => ({ ...classifyHand(h.landmarks, h.handedness), wrist: h.landmarks[0] }));
@@ -43,20 +47,27 @@ export function createHandController(tracker, { mode = 'shoot', onRelease = () =
     cls.forEach((c, i) => slots.forEach((s, j) => pairs.push([d2(c.wrist, s.wrist), i, j])));
     pairs.sort((a, b) => a[0] - b[0]);
     const match = new Map(), used = new Set();
-    for (const [, i, j] of pairs) if (!match.has(i) && !used.has(j)) { match.set(i, slots[j]); used.add(j); }
+    for (const [dd, i, j] of pairs) {
+      if (dd > CFG.handMatchMaxDist ** 2) break;
+      if (!match.has(i) && !used.has(j)) { match.set(i, slots[j]); used.add(j); }
+    }
     cls.forEach((c, i) => {
       let s = match.get(i);
-      if (!s) slots.push(s = { gate: createGestureGate(CFG.handStableFrames), stable: 'none' });
-      const prev = s.stable;
+      if (!s) slots.push(s = { gate: createGestureGate(N), charging: false, on: false, run: 0 });
       s.stable = s.gate(c.gesture);
       s.wrist = c.wrist; s.cur = c; s.seen = t;
-      if (s.stable === mode && prev !== mode) { tracker.press(c.side, c.level, t); active = s; }
-      else if (s === active && s.stable === mode) { if (c.gesture === mode) tracker.move(c.side, c.level); }
-      else if (s === active) {
-        active = null;
-        const shot = tracker.release(null, null, t);
-        if (shot) onRelease(shot);
-      }
+      const on = c.gesture === mode;
+      s.run = on === s.on ? s.run + 1 : 1;
+      s.on = on;
+      if (s.run >= N && on !== s.charging) {
+        s.charging = on;
+        if (on) { tracker.press(c.side, c.level, t); active = s; }
+        else if (s === active) {
+          active = null;
+          const shot = tracker.release(null, null, t);
+          if (shot) onRelease(shot);
+        }
+      } else if (s === active && on) tracker.move(c.side, c.level);
     });
     slots = slots.filter((s) => {
       if (t - s.seen <= CFG.handLostMs / 1000) return true; // ms -> s
@@ -65,7 +76,7 @@ export function createHandController(tracker, { mode = 'shoot', onRelease = () =
     });
     const shown = active || slots[0];
     return {
-      hands: hands.length,
+      hands: slots.length,
       gesture: shown ? shown.stable : 'none',
       side: shown ? shown.cur.side : null,
       level: shown ? shown.cur.level : null,

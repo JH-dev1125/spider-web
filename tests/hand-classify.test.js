@@ -2,18 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyHand, createGestureGate, createHandController, mirror } from '../src/hand-classify.js';
 import { createChargeTracker } from '../src/input-core.js';
-
-// Synthetic hand: 21 points at the wrist; each finger's PIP 0.1 above it, tip 0.2 (extended) or 0.05 (folded).
-const FINGERS = { i: [6, 8], m: [10, 12], r: [14, 16], p: [18, 20] };
-function hand(wx, wy, ext) {
-  const lm = Array.from({ length: 21 }, () => ({ x: wx, y: wy }));
-  for (const [f, [pip, tip]] of Object.entries(FINGERS)) {
-    lm[pip] = { x: wx, y: wy - 0.1 };
-    lm[tip] = { x: wx, y: wy - (ext.includes(f) ? 0.2 : 0.05) };
-  }
-  return lm;
-}
-const SHOOT = 'ip', FIST = '', OPEN = 'imrp';
+import { hand, SHOOT, FIST, OPEN, NONE } from './hand-fixture.js';
 
 test('classifyHand gestures (thumb ignored)', () => {
   assert.equal(classifyHand(hand(0.5, 0.5, SHOOT), 'Right').gesture, 'shoot');
@@ -70,11 +59,12 @@ test('controller: moving during charge calls move; release uses last charge-pose
   const tr = createChargeTracker();
   const shots = [];
   const ctrl = createHandController(tr, { onRelease: (s) => shots.push(s) });
-  let t = feed(ctrl, [hand(0.8, 0.1, SHOOT)], 3, 0);
-  t = feed(ctrl, [hand(0.2, 0.5, SHOOT)], 2, t);
+  let t = feed(ctrl, [hand(0.55, 0.3, SHOOT)], 3, 0);
+  assert.deepEqual([tr.state(t).side, tr.state(t).level], ['R', 'hi']);
+  t = feed(ctrl, [hand(0.45, 0.4, SHOOT)], 2, t);
   assert.deepEqual([tr.state(t).side, tr.state(t).level], ['L', 'mid']);
-  // while the release is being confirmed the wrist drifts down; that must not change the aim
-  feed(ctrl, [hand(0.2, 0.9, FIST)], 3, t);
+  // while the release is being confirmed the wrist drifts down into 'lo'; that must not change the aim
+  for (const y of [0.5, 0.6, 0.7]) t = feed(ctrl, [hand(0.45, y, FIST)], 1, t);
   assert.deepEqual([shots[0].side, shots[0].level], ['L', 'mid']);
 });
 
@@ -120,5 +110,40 @@ test('controller: fist mode charges on fist, open releases; status reports open 
   for (let k = 0; k < 3; k++, t += DT) st = ctrl.update([{ landmarks: hand(0.5, 0.5, OPEN), handedness: 'Left' }], t);
   assert.equal(shots.length, 1);
   assert.deepEqual(st, { hands: 1, gesture: 'open', side: 'R', level: 'mid', open: true });
-  assert.deepEqual(ctrl.update([], t), { hands: 0, gesture: 'open', side: 'R', level: 'mid', open: true });
+  // hands counts tracked hands (seen within handLostMs), so frames without a detection don't flicker it to 0
+  assert.deepEqual(ctrl.update([], t), { hands: 1, gesture: 'open', side: 'R', level: 'mid', open: true });
+  assert.equal(ctrl.update([], t + 1).hands, 0);
+});
+
+test('controller: alternating none/open while letting go still releases after N raw non-charge frames', () => {
+  const tr = createChargeTracker();
+  const shots = [];
+  const ctrl = createHandController(tr, { onRelease: (s) => shots.push(s) });
+  let t = feed(ctrl, [hand(0.2, 0.1, SHOOT)], 3, 0);
+  for (const ext of [NONE, OPEN]) t = feed(ctrl, [hand(0.2, 0.1, ext)], 1, t);
+  assert.equal(shots.length, 0);
+  t = feed(ctrl, [hand(0.2, 0.1, NONE)], 1, t); // third non-charge frame in a row
+  assert.equal(shots.length, 1);
+  assert.deepEqual([shots[0].side, shots[0].level], ['L', 'hi']);
+  t = feed(ctrl, [hand(0.2, 0.1, SHOOT)], 3, t); // charging again presses again
+  assert.ok(tr.state(t));
+  for (const ext of [OPEN, NONE, OPEN]) t = feed(ctrl, [hand(0.2, 0.1, ext)], 1, t);
+  assert.equal(shots.length, 2);
+});
+
+test('controller: a hand far away does not inherit the charge of one that just vanished', () => {
+  const tr = createChargeTracker();
+  const shots = [];
+  const ctrl = createHandController(tr, { onRelease: (s) => shots.push(s) });
+  let t = feed(ctrl, [hand(0.2, 0.5, SHOOT)], 3, 0);
+  t = feed(ctrl, [hand(0.8, 0.5, OPEN)], 3, t); // appears the same frame the charging hand is gone
+  assert.equal(shots.length, 0);
+  t = feed(ctrl, [hand(0.8, 0.5, OPEN)], 10, t); // past handLostMs: the vanished hand's charge is cancelled
+  assert.equal(tr.state(t), null);
+  assert.equal(shots.length, 0);
+  // a hand moving a normal amount between frames keeps its identity
+  t = feed(ctrl, [hand(0.5, 0.5, SHOOT)], 3, t);
+  t = feed(ctrl, [hand(0.55, 0.5, SHOOT)], 1, t);
+  feed(ctrl, [hand(0.6, 0.5, OPEN)], 3, t);
+  assert.equal(shots.length, 1);
 });

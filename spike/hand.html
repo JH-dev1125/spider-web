@@ -8,7 +8,7 @@
   body { margin: 0; background: #111; color: #fff; font: 20px system-ui, sans-serif; display: flex; gap: 24px; padding: 16px; }
   #view { position: relative; width: 640px; height: 480px; background: #000; }
   #view > * { position: absolute; inset: 0; width: 100%; height: 100%; }
-  video { transform: scaleX(-1); object-fit: cover; }
+  video { transform: scaleX(-1); object-fit: fill; } /* fill, not cover: dots map 1:1 onto the frame */
   #grid { display: grid; grid-template: repeat(3, 1fr) / repeat(2, 1fr); }
   #grid div { border: 1px solid rgba(255,255,255,.25); }
   #grid .now { background: rgba(255,255,255,.12); }
@@ -48,16 +48,17 @@ function onFrame(st, hands) {
 }
 const onRelease = (s) => { $('last').textContent = `${s.side} ${s.level} ${s.heldSec.toFixed(2)}s`; };
 
-startHand($('cam'), tracker, now, { mode, onRelease, onFrame }).then((handle) => {
+const fail = (e) => {
+  $('info').textContent = '웹캠을 쓸 수 없음';
+  $('err').textContent = `${e.name || 'Error'}: ${e.message}`;
+};
+startHand($('cam'), tracker, now, { mode, onRelease, onFrame, onError: fail }).then((handle) => {
   $('mode').onclick = () => {
     mode = mode === 'shoot' ? 'fist' : 'shoot';
     handle.setMode(mode);
     $('mode').textContent = mode === 'shoot' ? '모드: shoot (검지·새끼)' : '모드: fist (주먹=충전, 펴면 발사)';
   };
-}).catch((e) => {
-  $('info').textContent = '웹캠을 쓸 수 없음';
-  $('err').textContent = `${e.name || 'Error'}: ${e.message}`;
-});
+}).catch(fail);
 </script>
 </body>
 </html>

@@ -52,7 +52,8 @@ let palmSec = 0; // open palm held on title/result
 window.addEventListener('keydown', (e) => {
   if (e.code !== 'KeyH' || e.repeat || mode !== 'title' || hand === 'loading' || hand === 'on') return;
   hand = 'loading';
-  startHand(camEl, tracker, now, { mode: 'shoot', onRelease: onShot, onFrame: (st) => { handStatus = st; } })
+  const onError = (err) => { console.warn('hand tracking stopped:', err); hand = 'failed'; handStatus = null; camEl.hidden = true; };
+  startHand(camEl, tracker, now, { mode: 'shoot', onRelease: onShot, onFrame: (st) => { handStatus = st; }, onError })
     .then(() => { hand = 'on'; camEl.hidden = false; })
     .catch((err) => { console.warn('hand mode unavailable:', err); hand = 'failed'; });
 });
@@ -125,12 +126,16 @@ function drawHud() {
 }
 
 function drawHandStatus() { // text just above the mirrored preview (bottom-right <video>)
-  if (hand !== 'on') return;
-  const st = handStatus;
+  if (hand !== 'on' && hand !== 'failed') return;
   ctx.font = `bold ${H.textPx}px ${H.font}`;
   ctx.fillStyle = H.color;
   ctx.textAlign = 'right';
   ctx.textBaseline = 'bottom';
+  if (hand === 'failed') { // title already shows it in the menu
+    if (mode !== 'title') ctx.fillText('웹캠을 쓸 수 없어 키보드로 진행해', w - H.margin, h - H.margin);
+    return;
+  }
+  const st = handStatus;
   const text = !st || !st.hands ? '손 없음' : `${st.gesture} · ${st.side === 'L' ? '왼' : '오'} · ${st.level}`;
   ctx.fillText(text, w - H.margin, camEl.getBoundingClientRect().top - H.margin);
 }

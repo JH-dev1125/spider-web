@@ -61,6 +61,7 @@ export const CFG = deepFreeze({
   handLostMs: 300, // hand unseen this long while charging = cancel
   handLevelCuts: [1 / 3, 2 / 3], // wrist y (0 = top) below these: hi, mid; else lo
   handRestartSec: 1, // open palm held this long on title/result = start
+  handMatchMaxDist: 0.2, // wrist moved farther than this (screen fraction) between frames = a different hand
   // render
   render: {
     clipNear: 1, // geometry is clipped this far in front of the camera
