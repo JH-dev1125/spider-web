@@ -2,6 +2,7 @@ import { CFG } from './config.js';
 import { createGame, stepGame, createBot } from './game.js';
 import { createChargeTracker } from './input-core.js';
 import { attachKeyboard } from './keyboard.js';
+import { startHand } from './hand.js';
 import { makeCamera, drawFrame } from './render.js';
 import { createScore } from './score.js';
 
@@ -40,7 +41,21 @@ let overSec = 0;
 let result = null;
 let bot = null;
 
-attachKeyboard(window, tracker, now, (shot) => { if (mode === 'play') shots.push(shot); });
+const onShot = (shot) => { if (mode === 'play') shots.push(shot); };
+attachKeyboard(window, tracker, now, onShot);
+
+// Hand mode (H on the title). Keyboard stays live alongside it.
+const camEl = document.getElementById('cam');
+let hand = 'off'; // 'off' | 'loading' | 'on' | 'failed'
+let handStatus = null; // latest createHandController status
+let palmSec = 0; // open palm held on title/result
+window.addEventListener('keydown', (e) => {
+  if (e.code !== 'KeyH' || e.repeat || mode !== 'title' || hand === 'loading' || hand === 'on') return;
+  hand = 'loading';
+  startHand(camEl, tracker, now, { mode: 'shoot', onRelease: onShot, onFrame: (st) => { handStatus = st; } })
+    .then(() => { hand = 'on'; camEl.hidden = false; })
+    .catch((err) => { console.warn('hand mode unavailable:', err); hand = 'failed'; });
+});
 
 function start() {
   g = createGame(Date.now());
@@ -93,18 +108,38 @@ function drawHud() {
       ['왼쪽 Q · A · Z   /   오른쪽 E · D · C   (위 · 가운데 · 아래)', H.textPx, H.color],
       ['길게 누를수록 거미줄이 멀리 나갑니다', H.textPx, H.color],
       ['Space: 키보드로 시작', H.hudPx, H.accent, true],
-      ['H: 손동작 켜기 (준비 중)', H.textPx, H.dim],
+      {
+        off: ['H: 손동작 켜기', H.textPx, H.color],
+        loading: ['웹캠 준비 중…', H.textPx, H.dim],
+        on: ['손동작 켜짐 · 손바닥을 1초 펴면 시작', H.textPx, H.accent],
+        failed: ['웹캠을 쓸 수 없어 키보드로 진행해', H.textPx, H.dim],
+      }[hand],
     ]);
   } else {
     lines([
       [`${result.distance} m`, H.titlePx, H.color, true],
       [result.newBest ? 'NEW BEST!' : `BEST ${score.best()} m`, H.hudPx, result.newBest ? H.accent : H.color, true],
-      ['Space / Enter: 다시 하기', H.textPx, H.color],
+      [hand === 'on' ? 'Space / Enter / 손바닥 1초: 다시 하기' : 'Space / Enter: 다시 하기', H.textPx, H.color],
     ]);
   }
 }
 
+function drawHandStatus() { // text just above the mirrored preview (bottom-right <video>)
+  if (hand !== 'on') return;
+  const st = handStatus;
+  ctx.font = `bold ${H.textPx}px ${H.font}`;
+  ctx.fillStyle = H.color;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'bottom';
+  const text = !st || !st.hands ? '손 없음' : `${st.gesture} · ${st.side === 'L' ? '왼' : '오'} · ${st.level}`;
+  ctx.fillText(text, w - H.margin, camEl.getBoundingClientRect().top - H.margin);
+}
+
 function update(dt) {
+  // open palm on the title or the result screen = Space
+  const palmOk = mode === 'title' || (mode === 'over' && overSec >= CFG.overFallSec);
+  palmSec = palmOk && handStatus?.open ? palmSec + dt : 0;
+  if (palmSec >= CFG.handRestartSec) { palmSec = 0; start(); }
   if (mode === 'title') return;
   if (bot && g.elapsed < botSec) shots.push(...bot(g, dt));
   const events = stepGame(g, dt, shots);
@@ -136,6 +171,7 @@ function frame() {
     shake: g.shake,
   });
   drawHud();
+  drawHandStatus();
   requestAnimationFrame(frame);
 }
 if (autoplay) {

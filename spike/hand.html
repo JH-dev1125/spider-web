@@ -1,0 +1,63 @@
+<!doctype html>
+<!-- Throwaway spike: judge how hand control feels. Serve the repo root and open /spike/hand.html. -->
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Web Runner hand spike</title>
+<style>
+  body { margin: 0; background: #111; color: #fff; font: 20px system-ui, sans-serif; display: flex; gap: 24px; padding: 16px; }
+  #view { position: relative; width: 640px; height: 480px; background: #000; }
+  #view > * { position: absolute; inset: 0; width: 100%; height: 100%; }
+  video { transform: scaleX(-1); object-fit: cover; }
+  #grid { display: grid; grid-template: repeat(3, 1fr) / repeat(2, 1fr); }
+  #grid div { border: 1px solid rgba(255,255,255,.25); }
+  #grid .now { background: rgba(255,255,255,.12); }
+  #grid .aim { background: rgba(255,213,74,.45); }
+  #info { font-size: 40px; font-weight: bold; line-height: 1.4; }
+  #err { color: #ff7a7a; font-size: 24px; }
+  button { font-size: 20px; margin-top: 16px; }
+</style>
+</head>
+<body>
+<div id="view"><video id="cam" playsinline muted></video><canvas id="dots" width="640" height="480"></canvas><div id="grid"></div></div>
+<div>
+  <div id="info">카메라 준비 중…</div>
+  <div id="err"></div>
+  <button id="mode">모드: shoot (검지·새끼)</button>
+  <p>충전 제스처를 유지하면 노란 칸에 조준, 풀면 발사.<br>마지막 발사: <span id="last">-</span></p>
+</div>
+<script type="module">
+import { startHand } from '../src/hand.js';
+import { createChargeTracker } from '../src/input-core.js';
+
+const $ = (id) => document.getElementById(id);
+const cells = {};
+for (const level of ['hi', 'mid', 'lo']) for (const side of ['L', 'R']) $('grid').appendChild(cells[side + level] = document.createElement('div'));
+const dots = $('dots').getContext('2d');
+const tracker = createChargeTracker();
+const now = () => performance.now() / 1000;
+let mode = 'shoot';
+
+function onFrame(st, hands) {
+  dots.clearRect(0, 0, 640, 480);
+  dots.fillStyle = '#4af';
+  for (const h of hands) for (const p of h.landmarks) dots.fillRect(p.x * 640 - 3, p.y * 480 - 3, 6, 6); // already mirrored
+  const aim = tracker.state(now());
+  for (const [k, el] of Object.entries(cells)) el.className = aim && k === aim.side + aim.level ? 'aim' : k === st.side + st.level ? 'now' : '';
+  $('info').innerHTML = `손 ${st.hands}개<br>gesture: ${st.gesture}<br>side: ${st.side ?? '-'} · level: ${st.level ?? '-'}<br>heldSec: ${aim ? aim.heldSec.toFixed(2) : '-'}`;
+}
+const onRelease = (s) => { $('last').textContent = `${s.side} ${s.level} ${s.heldSec.toFixed(2)}s`; };
+
+startHand($('cam'), tracker, now, { mode, onRelease, onFrame }).then((handle) => {
+  $('mode').onclick = () => {
+    mode = mode === 'shoot' ? 'fist' : 'shoot';
+    handle.setMode(mode);
+    $('mode').textContent = mode === 'shoot' ? '모드: shoot (검지·새끼)' : '모드: fist (주먹=충전, 펴면 발사)';
+  };
+}).catch((e) => {
+  $('info').textContent = '웹캠을 쓸 수 없음';
+  $('err').textContent = `${e.name || 'Error'}: ${e.message}`;
+});
+</script>
+</body>
+</html>
