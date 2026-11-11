@@ -37,7 +37,6 @@ python -m http.server 8000
 1. GitHub에서 빈 저장소를 만든다.
 2. 이 폴더에서:
    ```
-   git checkout main && git merge dev   # 게임 코드는 dev에 있고, main에는 지금 문서만 있다
    git remote add origin https://github.com/<아이디>/<저장소>.git
    git push -u origin main
    ```
