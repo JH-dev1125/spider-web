@@ -35,6 +35,8 @@ export const CFG = deepFreeze({
   releaseBoostUp: 6,
   releaseBoostForward: 4,
   wallBounceLoss: 0.5,
+  wallSkin: 0.05,
+  bounceMinSpeed: 2,
   autoReleaseBackAngleDeg: 35,
   missShowSec: 0.25,
   keys: {
