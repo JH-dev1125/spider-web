@@ -32,6 +32,8 @@ export const CFG = deepFreeze({
   chargeMax: 70,
   chargeFullSec: 1.0,
   reelFactor: 0.85,
+  minRopeLen: 3,
+  maxSwingSec: 4,
   releaseBoostUp: 6,
   releaseBoostForward: 4,
   wallBounceLoss: 0.5,

@@ -131,7 +131,7 @@ test('rope dragging into the face: no jitter, not stuck, alive', () => {
   }
 });
 
-test('low anchor passed over still swings up and releases', () => {
+test('regression: L lo anchor releases within 3 s', () => {
   const p = createPlayer();
   attach(p, webFrom(p, 'L', 'lo'));
   let released = false;
@@ -156,4 +156,57 @@ test('(g) ceiling caps height', () => {
     stepPlayer(p, DT, [], V);
     assert.ok(p.pos.y <= CFG.ceiling);
   }
+});
+
+test('anchor closer than minRopeLen is refused; wall-slide web spam gains nothing', () => {
+  const face = [{ side: 'R', z0: -50, z1: 400, h: 110 }];
+  const cast = (level) => castWeb(p.pos, aimVector('R', level), CFG.chargeMax, face);
+  const p = createPlayer();
+  p.pos.x = W - CFG.wallSkin;
+  const y0 = p.pos.y;
+  assert.ok(cast('mid'));
+  assert.equal(attach(p, cast('mid')), false);
+  assert.equal(p.anchor, null);
+  let dead = false;
+  for (let t = 0; t < 5 && !dead; t += DT) {
+    for (const level of ['hi', 'mid', 'lo']) {
+      const a = !p.anchor && cast(level);
+      if (a && attach(p, a)) assert.ok(false, `${level} attached at ${p.pos.x}`);
+    }
+    dead = stepPlayer(p, DT, face, V).includes('dead');
+    assert.ok(p.pos.y <= y0);
+  }
+  assert.ok(dead);
+});
+
+test('attach returns true for a normal anchor', () => {
+  const p = createPlayer();
+  assert.equal(attach(p, webFrom(p, 'R', 'hi')), true);
+});
+
+test('failsafe: rope released after maxSwingSec even if the swing never ascends', () => {
+  const p = createPlayer();
+  p.vel.z = 0;
+  attach(p, { x: 0, y: CFG.startHeight + 10, z: 0 }); // dead hang, no forward push
+  let tReleased = null;
+  for (let t = 0; t < CFG.maxSwingSec + 1 && tReleased === null; t += DT) {
+    if (stepPlayer(p, DT, [], 0).includes('released')) tReleased = t;
+  }
+  assert.ok(tReleased !== null && tReleased <= CFG.maxSwingSec + DT, `released at ${tReleased}`);
+});
+
+test('ascending only after the lowest point: rising attach does not release at the apex', () => {
+  const p = createPlayer();
+  p.vel.y = 15;
+  attach(p, webFrom(p, 'R', 'hi'));
+  let sawNeg = false;
+  let released = false;
+  for (let t = 0; t < CFG.maxSwingSec && !released; t += DT) {
+    released = stepPlayer(p, DT, towers, V).includes('released');
+    if (!released && p.vel.y <= 0) sawNeg = true;
+  }
+  assert.ok(released);
+  assert.ok(sawNeg, 'released before vy ever went negative');
+  // vy before the boost was > 0: released while rising again, not at the first apex
+  assert.ok(p.vel.y > CFG.releaseBoostUp, `vy at release ${p.vel.y}`);
 });

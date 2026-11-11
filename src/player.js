@@ -8,15 +8,23 @@ export const createPlayer = () => ({
   anchor: null,
   ropeLen: 0,
   swingPhase: 'none',
+  sawDescent: false,
+  swingSec: 0,
   alive: true,
 });
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 
+// Returns false (miss) for anchors too close to swing on, e.g. casting into the face the player slides along.
 export function attach(p, point) {
+  const len = dist(p.pos, point);
+  if (len < CFG.minRopeLen) return false;
   p.anchor = { ...point };
-  p.ropeLen = dist(p.pos, point) * CFG.reelFactor;
+  p.ropeLen = len * CFG.reelFactor;
   p.swingPhase = 'descending';
+  p.sawDescent = false;
+  p.swingSec = 0;
+  return true;
 }
 
 export function detach(p) {
@@ -25,7 +33,7 @@ export function detach(p) {
 }
 
 // Rope constraint, phase tracking and auto-release. Returns true if released.
-function swing(p) {
+function swing(p, dt) {
   const { pos, vel, anchor: a } = p;
   const d = { x: pos.x - a.x, y: pos.y - a.y, z: pos.z - a.z };
   const len = Math.hypot(d.x, d.y, d.z);
@@ -37,13 +45,17 @@ function swing(p) {
     const vn = vel.x * n.x + vel.y * n.y + vel.z * n.z;
     if (vn > 0) { vel.x -= vn * n.x; vel.y -= vn * n.y; vel.z -= vn * n.z; }
   }
-  if (p.swingPhase === 'descending' && vel.y > 0) p.swingPhase = 'ascending';
+  p.swingSec += dt;
+  if (vel.y <= 0) p.sawDescent = true;
+  // ascending only after passing the lowest point (spec 5.3)
+  if (p.swingPhase === 'descending' && p.sawDescent && vel.y > 0) p.swingPhase = 'ascending';
   // rope angle from vertical, positive when the anchor is behind the player (z)
   const backDeg = Math.atan2(pos.z - a.z, a.y - pos.y) / RAD;
-  if (p.swingPhase === 'ascending' && (vel.y <= 0 || backDeg > CFG.autoReleaseBackAngleDeg)) {
-    detach(p);
+  const done = p.swingPhase === 'ascending' && (vel.y <= 0 || backDeg > CFG.autoReleaseBackAngleDeg);
+  if (done || p.swingSec >= CFG.maxSwingSec) {
     vel.y += CFG.releaseBoostUp;
     vel.z += CFG.releaseBoostForward;
+    detach(p);
     return true;
   }
   return false;
@@ -82,7 +94,7 @@ export function stepPlayer(p, dt, buildings, minForwardSpeed) {
     pos.y = CFG.ceiling;
     vel.y = Math.min(vel.y, 0);
   }
-  if (p.anchor && swing(p)) events.push('released');
+  if (p.anchor && swing(p, dt)) events.push('released');
   vel.z = Math.max(vel.z, minForwardSpeed);
   if (pos.y <= 0) {
     p.alive = false;
