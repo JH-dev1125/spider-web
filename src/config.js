@@ -107,13 +107,14 @@ export const CFG = deepFreeze({
   handReleaseFrames: 3, // non-shoot frames in a row = release (debounced: a flicker must not drop the rope)
   // finger bend = 3D angle MCP->PIP vs PIP->TIP in degrees (0 straight, ~130 folded onto the palm)
   handStraightDeg: 30, // 'open': all four fingers bend below this
-  handExtendDeg: 60, // 'shoot': index and pinky bend below this ...
+  handExtendDeg: 65, // (was 60: flat/turned hands read 'none') 'shoot': index and pinky bend below this ...
   handCurlDeg: 40, // ... and middle and ring bend above this (half-curled still counts)
   handFistDeg: 90, // 'fist': all four bend above this
+  handHoldSlackDeg: 35, // while holding a web, index/pinky may bend this much past handExtendDeg before it lets go
   handHystDeg: 10, // the gesture held last frame gets its thresholds loosened by this much
   handMinConfidence: 0.35, // MediaPipe detection / presence / tracking confidence (default 0.5)
   handLostMs: 300, // hand unseen this long while charging = cancel
-  handLevelCuts: [1 / 3, 2 / 3], // wrist y (0 = top) below these: hi, mid; else lo
+  handLevelCuts: [1 / 3, 2 / 3], // palm-centre y (0 = top) below these: hi, mid; else lo
   handPromptTimeoutSec: 15, // camera permission prompt nobody answers = give up (hand 'failed', H retries)
   handRestartSec: 1, // open palm held this long on title/result = start
   handZipShrink: 0.18, // shoot pose held and the hand's apparent size (wrist -> middle MCP) drops this much..

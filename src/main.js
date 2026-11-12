@@ -158,7 +158,15 @@ function drawHandStatus() { // text just above the mirrored preview (bottom-righ
     return;
   }
   const st = handStatus;
-  ctx.fillText(handStatusText(st), w - H.margin, camEl.getBoundingClientRect().top - H.margin);
+  const r = camEl.getBoundingClientRect();
+  ctx.fillText(handStatusText(st), w - H.margin, r.top - H.margin);
+  // zone guides over the preview: left/right half and the hi/mid/lo cuts the game actually uses
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(r.left + r.width / 2, r.top); ctx.lineTo(r.left + r.width / 2, r.bottom);
+  for (const k of CFG.handLevelCuts) { ctx.moveTo(r.left, r.top + r.height * k); ctx.lineTo(r.right, r.top + r.height * k); }
+  ctx.stroke();
 }
 
 function update(dt) {

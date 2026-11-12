@@ -36,11 +36,27 @@ export function gestureFromBends([i, m, r, p], prev = 'none') {
 // side = the half of the MIRRORED preview the wrist is in (what the user sees: hand on the left = 'L'),
 // level = the wrist's height in that same preview. handedness is accepted but only informational.
 // opts.world: world landmarks for the bend angles (metric 3D, no aspect distortion); opts.prev: see gestureFromBends.
+// Palm centre, not the wrist: the wrist sits well below the hand, so with wrist height the top third was
+// nearly unreachable and the zones did not match where the user sees the hand in the preview.
+export const palmCenter = (lms) => {
+  const ids = [0, 5, 9, 13, 17];
+  return { x: ids.reduce((a, i) => a + lms[i].x, 0) / 5, y: ids.reduce((a, i) => a + lms[i].y, 0) / 5 };
+};
+
 export function classifyHand(lms, handedness, { world, prev } = {}) {
-  const w = lms[0];
-  const gesture = gestureFromBends(fingerBends(world ?? lms), prev);
+  const c = palmCenter(lms);
+  const bends = fingerBends(world ?? lms);
+  const gesture = gestureFromBends(bends, prev);
   const [hi, mid] = CFG.handLevelCuts;
-  return { gesture, side: w.x < 0.5 ? 'L' : 'R', level: w.y < hi ? 'hi' : w.y < mid ? 'mid' : 'lo' };
+  return { gesture, bends, side: c.x < 0.5 ? 'L' : 'R', level: c.y < hi ? 'hi' : c.y < mid ? 'mid' : 'lo' };
+}
+
+// While a web is held, only a clear break of the pose lets go: index or pinky folds well past the shoot limit,
+// or the hand opens flat. A tilted or half-turned hand that reads 'none' keeps the rope (it used to drop it).
+export function stillHolding([i, m, r, p]) {
+  const lim = CFG.handExtendDeg + CFG.handHoldSlackDeg;
+  const open = m < CFG.handStraightDeg && r < CFG.handStraightDeg;
+  return i < lim && p < lim && !open;
 }
 
 // Apparent hand size in the image: wrist -> middle-finger MCP. Pulling the hand toward the body shrinks it.
@@ -104,7 +120,7 @@ export function createHandController(tracker, { mode = 'shoot', onShot = () => {
       s.prev = c.gesture;
       s.stable = s.gate(c.gesture);
       s.wrist = h.landmarks[0]; s.cur = c; s.seen = t;
-      const on = c.gesture === mode;
+      const on = s.charging && mode === 'shoot' ? stillHolding(c.bends) : c.gesture === mode;
       s.run = on === s.on ? s.run + 1 : 1;
       s.on = on;
       if (on !== s.charging && s.run >= (on ? CFG.handStableFrames : CFG.handReleaseFrames)) {

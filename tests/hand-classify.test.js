@@ -13,9 +13,10 @@ test('classifyHand gestures (thumb ignored)', () => {
   assert.equal(classifyHand(hand(0.5, 0.5, 'i'), 'Left').gesture, 'none');
 });
 
-test('classifyHand side/level from wrist in mirrored screen space', () => {
-  assert.deepEqual(classifyHand(hand(0.2, 0.1, SHOOT), 'Right'), { gesture: 'shoot', side: 'L', level: 'hi' });
-  assert.deepEqual(classifyHand(hand(0.8, 0.9, FIST), 'Left'), { gesture: 'fist', side: 'R', level: 'lo' });
+const pick = ({ gesture, side, level }) => ({ gesture, side, level });
+test('classifyHand side/level from the palm in mirrored screen space', () => {
+  assert.deepEqual(pick(classifyHand(hand(0.2, 0.1, SHOOT), 'Right')), { gesture: 'shoot', side: 'L', level: 'hi' });
+  assert.deepEqual(pick(classifyHand(hand(0.8, 0.9, FIST), 'Left')), { gesture: 'fist', side: 'R', level: 'lo' });
   assert.equal(classifyHand(hand(0.3, 0.5, FIST), 'Left').level, 'mid');
   // a bare label (no score) is not trusted: same position, other label, same side
   assert.equal(classifyHand(hand(0.2, 0.5, FIST), 'Left').side, 'L');
@@ -313,4 +314,17 @@ test('controller: HUD shoot implies a press reached the game, even across start 
     st = step(ext, t += DT);
     if (st.gesture === 'shoot') assert.equal(got.at(-1).type, 'press');
   }
+});
+
+test('level comes from the palm centre, in thirds of the preview', async () => {
+  const { palmCenter } = await import('../src/hand-classify.js');
+  const at = (y) => Array.from({ length: 21 }, () => ({ x: 0.3, y, z: 0 }));
+  assert.equal(palmCenter(at(0.2)).y, 0.2);
+});
+
+test('a held web survives a tilted hand that reads none, but lets go on an open hand or a folded index', async () => {
+  const { stillHolding } = await import('../src/hand-classify.js');
+  assert.equal(stillHolding([70, 50, 50, 75]), true); // tilted thwip: index/pinky past 60 but within slack
+  assert.equal(stillHolding([10, 10, 10, 10]), false); // flat open hand
+  assert.equal(stillHolding([120, 120, 120, 20]), false); // index folded
 });
