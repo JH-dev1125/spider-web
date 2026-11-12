@@ -1,150 +1,109 @@
+// render.js needs three.js + WebGL; these cover its pure helpers (render-math.js, character.js pose math).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG } from '../src/config.js';
-import { project, makeCamera } from '../src/render.js';
+import { followCamera, speedK, shakeOffset, speedLineK, wrapZ } from '../src/render-math.js';
+import { poseTarget, blendPose, flipAngle, JOINTS } from '../src/character.js';
 import { createPlayer } from '../src/player.js';
-import { makeRng } from '../src/world.js';
 
-const W = 1280, H = 720;
-const cam = { x: 0, y: 10, z: 0, fovDeg: 70 };
+const R = CFG.render;
+const near = (a, b, eps = 1e-9) => Math.abs(a - b) < eps;
 
-test('point straight ahead projects to screen centre', () => {
-  const p = project({ x: 0, y: 10, z: 50 }, cam, W, H);
-  assert.ok(Math.abs(p.sx - W / 2) < 1e-9);
-  assert.ok(Math.abs(p.sy - H / 2) < 1e-9);
-});
-
-test('farther point has smaller scale', () => {
-  const a = project({ x: 0, y: 10, z: 20 }, cam, W, H);
-  const b = project({ x: 0, y: 10, z: 80 }, cam, W, H);
-  assert.ok(b.scale < a.scale);
-});
-
-test('right x is right of centre, higher y is above camera-height point', () => {
-  assert.ok(project({ x: 5, y: 10, z: 30 }, cam, W, H).sx > W / 2);
-  const up = project({ x: 0, y: 20, z: 30 }, cam, W, H);
-  const level = project({ x: 0, y: 10, z: 30 }, cam, W, H);
-  assert.ok(up.sy < level.sy);
-});
-
-test('points behind or inside near plane are null', () => {
-  assert.equal(project({ x: 0, y: 10, z: -5 }, cam, W, H), null);
-  assert.equal(project({ x: 0, y: 10, z: CFG.camNear }, cam, W, H), null);
-});
-
-test('scale is focal length over depth', () => {
-  const f = (H / 2) / Math.tan((cam.fovDeg * Math.PI) / 360);
-  const p = project({ x: 0, y: 0, z: 40 }, cam, W, H);
-  assert.ok(Math.abs(p.scale - f / 40) < 1e-9);
-});
-
-test('makeCamera without prev sits behind and above the player', () => {
+test('camera without prev sits behind and above the player, looking ahead', () => {
   const p = createPlayer();
-  const c = makeCamera(p, null, 1 / 60);
-  assert.ok(Math.abs(c.x - p.pos.x) < 1e-9);
-  assert.ok(Math.abs(c.y - (p.pos.y + CFG.camUp)) < 1e-9);
-  assert.ok(Math.abs(c.z - (p.pos.z - CFG.camBack)) < 1e-9);
+  const c = followCamera(p, null, 1 / 60);
+  assert.ok(near(c.x, p.pos.x));
+  assert.ok(near(c.y, p.pos.y + R.camUp));
+  assert.ok(near(c.z, p.pos.z - R.camBack));
+  assert.ok(c.lz > p.pos.z, 'looks ahead of the hero');
 });
 
-test('faster player gives wider fov, never above fovMax', () => {
-  const slow = createPlayer();
-  const fast = createPlayer();
+test('faster player gives wider fov, clamped to [fovMin, fovMax]', () => {
+  const slow = createPlayer(), fast = createPlayer(), huge = createPlayer();
   fast.vel.z = CFG.maxSpeed;
-  const huge = createPlayer();
   huge.vel.z = CFG.maxSpeed * 10;
-  const a = makeCamera(slow, null, 1 / 60).fovDeg;
-  const b = makeCamera(fast, null, 1 / 60).fovDeg;
-  assert.ok(b > a);
-  assert.ok(makeCamera(huge, null, 1 / 60).fovDeg <= CFG.fovMax);
-  assert.ok(a >= CFG.fovMin);
+  const a = followCamera(slow, null, 0).fovDeg;
+  assert.ok(near(a, R.fovMin));
+  assert.ok(followCamera(fast, null, 0).fovDeg > a);
+  assert.ok(near(followCamera(huge, null, 0).fovDeg, R.fovMax));
+  assert.equal(speedK({ x: 0, y: 0, z: 0 }), 0);
 });
 
 test('camera smoothing: partial step, frame-rate independent', () => {
   const p = createPlayer();
-  const prev = makeCamera(p, null, 1 / 60);
-  p.pos.x += 4; p.pos.y += 4; p.pos.z += 4; // attach() reel snap
-  const one = makeCamera(p, prev, 1 / 30);
+  const prev = followCamera(p, null, 1 / 60);
+  p.pos.x += 4; p.pos.y += 4; p.pos.z += 4;
+  const one = followCamera(p, prev, 1 / 30);
   assert.ok(one.x > prev.x && one.x < p.pos.x);
   assert.ok(one.y > prev.y && one.z > prev.z);
-  const twoSteps = makeCamera(p, makeCamera(p, prev, 1 / 60), 1 / 60);
-  for (const k of ['x', 'y', 'z']) assert.ok(Math.abs(twoSteps[k] - one[k]) < 1e-9);
+  const two = followCamera(p, followCamera(p, prev, 1 / 60), 1 / 60);
+  for (const k of ['x', 'y', 'z', 'lx', 'ly', 'lz', 'fovDeg']) assert.ok(near(two[k], one[k]), k);
 });
 
-// Recording stub: every method records its numeric args; gradients return the stub itself.
-function stubCtx() {
-  const nums = [];
-  const pts = [];
-  const ctx = new Proxy({}, {
-    get(o, k) {
-      if (k in o) return o[k];
-      return (...args) => {
-        for (const a of args) if (typeof a === 'number') nums.push([k, a]);
-        if (k === 'moveTo' || k === 'lineTo') pts.push(args);
-        return k.startsWith('create') ? ctx : undefined;
-      };
-    },
-    set(o, k, v) { o[k] = v; return true; },
-  });
-  return { ctx, nums, pts };
-}
+test('steady forward flight keeps the camera ~camBack behind (z lead; discrete steps leave a small residue)', () => {
+  const p = createPlayer();
+  let c = followCamera(p, null, 0);
+  for (let i = 0; i < 600; i++) { p.pos.z += p.vel.z / 60; c = followCamera(p, c, 1 / 60); }
+  assert.ok(near(c.z, p.pos.z - R.camBack, 0.3), `${p.pos.z - c.z}`);
+});
 
-test('drawFrame smoke: finite coords, nothing emitted from inside the near plane', async () => {
-  const { drawFrame } = await import('../src/render.js');
-  for (const pose of ['swing', 'glide', 'roll', 'tuck', 'fall']) {
-    for (const camY of [10, 200]) { // below and above roofs
-      const p = createPlayer();
-      p.pos.y = camY;
-      p.vel.z = CFG.maxSpeed; // speed lines on
-      const cam = makeCamera(p, null, 0);
-      p.anchor = { x: -CFG.corridorHalfWidth, y: camY + 10, z: cam.z - 3 }; // anchor behind the camera
-      const buildings = [
-        { side: 'L', z0: cam.z - 10, z1: cam.z + 30, h: 60 }, // straddles cam.z
-        { side: 'R', z0: cam.z + CFG.camNear * 0.5, z1: cam.z + 50, h: 120 }, // starts inside near plane
-        { side: 'R', z0: cam.z + 80, z1: cam.z + 140, h: 40 },
-        { side: 'L', z0: cam.z - 60, z1: cam.z - 20, h: 40 }, // fully behind
-      ];
-      const { ctx, nums, pts } = stubCtx();
-      drawFrame(ctx, W, H, {
-        player: p, buildings, cam, pose, t: 1.234, shake: 3,
-        aim: { side: 'R', level: 'lo', heldSec: 0.5 },
-        missLine: { to: { x: CFG.corridorHalfWidth, y: 0, z: cam.z - 5 }, age: 0.1 },
-      });
-      assert.ok(pts.length > 50, 'something was drawn');
-      // projectTo turns rejected points into NaN, so this also proves no dz <= camNear point reached a path
-      for (const [k, v] of nums) assert.ok(Number.isFinite(v), `${pose}/${camY}: ${k} got ${v}`);
+test('a restart teleport snaps the camera', () => {
+  const p = createPlayer();
+  const far = followCamera(p, null, 0);
+  p.pos.z += 5000;
+  assert.ok(near(followCamera(p, far, 1 / 60).z, p.pos.z - R.camBack));
+});
+
+test('shake is zero at rest and bounded', () => {
+  assert.deepEqual(shakeOffset(0, 1.3).map(Math.abs), [0, 0]);
+  for (const v of shakeOffset(R.shakePeak, 0.7)) assert.ok(Math.abs(v) <= R.shakePeak * R.shakeM);
+  assert.equal(speedLineK(CFG.baseSpeed), 0);
+  assert.equal(speedLineK(CFG.baseSpeed * R.speedLineFull * 2), 1);
+});
+
+test('wrapZ lands in the window and keeps the period', () => {
+  for (const z of [-3000, -1, 0, 7, 999, 12345.5]) for (const camZ of [0, 400.25, 9000]) {
+    const w = wrapZ(z, camZ, 250, 1000);
+    assert.ok(w >= camZ - 250 && w < camZ + 750, `${z} ${camZ} -> ${w}`);
+    assert.ok(near((w - z) / 1000, Math.round((w - z) / 1000), 1e-9));
+  }
+});
+
+test('every pose gives finite joints; unknown pose falls back to glide', () => {
+  for (const pose of [...Object.keys(CFG.character.poses), 'nope']) {
+    for (const mirror of [false, true]) {
+      const t = poseTarget(pose, 1.7, mirror);
+      assert.equal(t.length, JOINTS.length * 3);
+      assert.ok(t.every(Number.isFinite), pose);
     }
   }
+  assert.deepEqual(poseTarget('nope', 0, false), poseTarget('glide', 0, false));
 });
 
-test('project rejects at camNear and matches drawFrame focal length', () => {
-  const c = { x: 0, y: 0, z: 0, fovDeg: 90 };
-  assert.equal(project({ x: 0, y: 0, z: CFG.camNear }, c, W, H), null);
-  const p = project({ x: 1, y: 0, z: 1 }, c, W, H); // tan(45deg) = 1 -> focal = H/2
-  assert.ok(Math.abs(p.sx - (W / 2 + H / 2)) < 1e-9);
+test('swing raises the web arm; mirroring moves it to the other side', () => {
+  const i = (j) => JOINTS.indexOf(j) * 3;
+  const r = poseTarget('swing', 0, false), l = poseTarget('swing', 0, true);
+  assert.ok(r[i('shR') + 2] > 2.5, 'right arm overhead (+z raises the right arm)');
+  assert.ok(l[i('shL') + 2] < -2.5, 'mirrored: left arm overhead (mirrored sign)');
+  assert.ok(near(l[i('shL') + 2], -r[i('shR') + 2]));
+  // symmetric pose: left = mirrored right
+  const g = poseTarget('glide', 0, false);
+  assert.ok(near(g[i('shL') + 2], -g[i('shR') + 2]));
 });
 
-test('swing hand is raised toward the web side, finite for every pose', async () => {
-  const { characterHand } = await import('../src/character.js');
-  const out = { x: 0, y: 0 };
-  characterHand('swing', 100, 50, out); // a time jump snaps straight to the pose
-  assert.ok(out.x > 0 && out.y < -0.3 * CFG.character.minPx, `swing hand at ${out.x},${out.y}`);
-  for (const pose of ['glide', 'roll', 'tuck', 'fall', 'nope']) {
-    characterHand(pose, 200, 50, out);
-    assert.ok(Number.isFinite(out.x) && Number.isFinite(out.y), pose);
-  }
+test('blendPose eases frame-rate independently and converges', () => {
+  const a = poseTarget('glide', 0, false), b = poseTarget('tuck', 0, false);
+  const one = blendPose(Float64Array.from(a), b, 1 / 30);
+  const two = blendPose(blendPose(Float64Array.from(a), b, 1 / 60), b, 1 / 60);
+  for (let k = 0; k < a.length; k++) assert.ok(near(one[k], two[k]));
+  const done = blendPose(Float64Array.from(a), b, 10);
+  for (let k = 0; k < a.length; k++) assert.ok(near(done[k], b[k], 1e-6));
 });
 
-test('a tall face right beside the camera draws a bounded number of windows', async () => {
-  const { drawFrame } = await import('../src/render.js');
-  const p = createPlayer();
-  p.pos.x = CFG.corridorHalfWidth - 1; // hugging the right wall
-  const cam = makeCamera(p, null, 0);
-  const { ctx, pts } = stubCtx();
-  drawFrame(ctx, W, H, {
-    player: p, cam, pose: 'glide', t: 1, shake: 0, aim: null, missLine: null,
-    buildings: [{ side: 'R', z0: cam.z - 20, z1: cam.z + 400, h: CFG.ceiling }],
-  });
-  const quads = pts.length / 4;
-  assert.ok(quads > 200, `quads drawn: ${quads}`);
-  assert.ok(quads < CFG.render.gridColsMax * CFG.render.gridRowsMax, `too many: ${quads}`);
+test('trick flips make exactly one turn over trickSec', () => {
+  assert.equal(flipAngle('roll', 0), 0);
+  assert.ok(near(flipAngle('tuck', CFG.trickSec), Math.PI * 2));
+  assert.ok(near(flipAngle('roll', CFG.trickSec * 5), Math.PI * 2));
+  assert.equal(flipAngle('glide', 0.3), 0);
+  assert.equal(flipAngle('swing', 0.3), 0);
 });

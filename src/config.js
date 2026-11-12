@@ -65,70 +65,60 @@ export const CFG = deepFreeze({
   handMatchMaxDist: 0.2, // wrist moved farther than this (screen fraction) between frames = a different hand
   // render
   render: {
-    clipNear: 1, // geometry is clipped this far in front of the camera
-    skyline: [ // far -> near; parallax = px scrolled per metre of cam.z
-      { colW: 34, hMin: 0.03, hMax: 0.13, parallax: 0.04, color: '#5d6f9e' },
-      { colW: 52, hMin: 0.05, hMax: 0.22, parallax: 0.12, color: '#3a4572' },
-      { colW: 78, hMin: 0.08, hMax: 0.32, parallax: 0.3, color: '#232a4d' },
-    ],
-    skylineLitChance: 0.35,
-    skylineLitPerCol: 4,
-    skylineLitPx: 2,
+    // camera (the top-level cam*/fov* keys were the old canvas camera's; three.js uses these)
+    camBack: 5, // m behind the hero: the ~1.8 m hero is ~1/4 of the screen at fovMin
+    camUp: 1.4,
+    lookAhead: 0.12, // s: the camera looks at pos + vel * lookAhead
+    lookUp: 0.6,
+    camWallGap: 4, // m: the camera stays this far inside the corridor walls
+    camSnap: 80, // m: a bigger jump (restart) snaps the camera instead of easing
+    fovMin: 58,
+    fovMax: 84,
+    near: 0.1,
+    far: 1700,
+    fogDensity: 0.0042, // exp2: ~66% hazed at the 260 m spawn horizon, opaque by ~400 m
+    // city
+    floorH: 3,
+    windowColSpacing: 2.5,
+    texCols: 8, // the window texture tile is texCols x texRows windows
+    texRows: 8,
+    windowLit: 0.38,
+    windowStyles: [[0.6, 0.55], [0.42, 0.92], [0.92, 0.86]], // [glass w, glass h] as a fraction of a cell
+    facadeTints: [[86, 96, 140], [112, 92, 128], [72, 104, 132], [120, 114, 142], [96, 84, 110]],
+    skylineTints: [[60, 66, 104], [78, 70, 106], [52, 72, 100]],
+    depthMin: 18,
+    depthMax: 34,
+    corniceH: 0.8,
+    tankChance: 0.55,
+    antennaChance: 0.4,
+    antennaH: 14,
+    skylineCount: 260,
+    skylineXMin: 60,
+    skylineXMax: 460,
+    skylineSpan: 1000, // skyline boxes wrap over [cam z - skylineBack, cam z - skylineBack + skylineSpan]
+    skylineBack: 250,
     streetLightSpacing: 14,
     streetLightXs: [-62, -44, -26, -14, 14, 26, 44, 62],
-    streetLightMin: 1,
-    streetLightSize: 0.6,
+    streetLightY: 6,
     carSpacing: 9,
     carSpeed: 18,
     carLanes: [-8, -3, 3, 8],
     carGapChance: 0.55,
-    buildingDepth: 22,
-    // facade LOD by distance from the camera: window grid < gridDist < stripes < stripeDist < flat + fog
-    floorH: 3,
-    windowColSpacing: 2.5,
-    gridDist: 70,
-    stripeDist: 170,
-    gridRowsMax: 32, // per column, only rows inside the screen
-    gridColsMax: 28,
-    // per-building window style, picked by hash: [glass width, glass height] as a fraction of a cell, lit chance
-    windowStyles: [
-      { gw: 0.6, gh: 0.55, lit: 0.55, glass: 'dark' }, // punched grid
-      { gw: 0.42, gh: 1, lit: 0.5, glass: 'dark' }, // vertical strips
-      { gw: 0.94, gh: 0.9, lit: 0.3, glass: 'curtain' }, // glass curtain wall
-    ],
-    facadeTints: [[70, 78, 112], [92, 76, 104], [58, 84, 106], [96, 92, 116]],
-    curtainGlass: [34, 52, 92],
-    corniceH: 0.8,
-    corniceColor: '#7d86b0',
-    tankChance: 0.5,
-    antennaChance: 0.4,
-    antennaH: 14,
-    antennaLight: '#ff4a4a',
-    tankColor: '#3a3048',
-    tankTop: '#544463',
-    mullionMaxPx: 5,
-    sunX: 0.03, // fraction of the width right of centre: low sun at the end of the street
-    sunGlow: 'rgba(255,190,120,0.55)',
-    hazeGlow: 'rgba(255,170,120,0.18)',
-    vignette: 'rgba(4,4,18,0.5)',
-    fogSteps: 8,
-    webWidth: 0.06,
-    webMinPx: 1.5,
-    webMaxPx: 5,
-    aimDash: [6, 6],
-    aimWidthPx: 2,
-    aimDotPx: 4,
-    playerHand: 0.9, // web leaves the hand ~0.9 m above the body centre
+    streetSpan: 700, // street lights and cars wrap over this many metres around the camera
+    sunDir: [0.08, 0.1, 1], // world coords: low sun at the far end of the street
+    // rope / web
+    ropeRadius: 0.012, // min; drawn radius = camera distance * ropeRadiusPerM (~constant px width)
+    ropeRadiusPerM: 0.0035,
+    ropeMaxRadius: 0.6,
+    splatSize: 1.8,
+    playerHand: 0.9, // game.js casts from here; the drawn rope leaves the rig's hand instead
+    // speed feel
     speedLineStart: 1.3, // * baseSpeed
     speedLineFull: 2.4,
     speedLineCount: 48,
-    speedLineRate: 1.6,
-    speedLineLen: 0.22, // fraction of the screen half-diagonal
-    speedLineInner: 0.45,
-    speedLineWidth: 2.5,
-    speedLineMinFrac: 0.3,
     shakeFreqX: 47,
     shakeFreqY: 61,
+    shakeM: 0.03, // metres of camera shake per unit of view.shake
     shakePeak: 7,
     shakeDecay: 9,
     bounceShake: 3,
@@ -172,34 +162,21 @@ export const CFG = deepFreeze({
     lens: '#f4f6ff',
   },
   character: {
-    height: 1.8, // metres
-    drawScale: 1.35, // drawn larger than life so the hero reads at play distance
-    minPx: 95, // body unit clamp in px; the figure is ~0.95 units tall
-    maxPx: 135,
-    rollSpeed: 9, // rad/s
+    height: 1.8, // metres; the rig in character.js is built to this
+    blendRate: 12, // 1/s, pose-to-pose easing
+    turnRate: 8, // 1/s, body orientation easing
     flailSpeed: 14,
-    flailAmp: 0.45,
-    blendRate: 14, // 1/s, pose-to-pose easing
-    // back view, unit = drawn body unit, y down, origin = body centre
-    body: {
-      headY: -0.375, headR: 0.078,
-      shoulderX: 0.115, shoulderY: -0.265, chestW: 0.13, waistW: 0.075, waistY: 0.02, hipX: 0.055, hipY: 0.04,
-      arm: [0.15, 0.14], armW: [0.062, 0.05], handR: 0.033,
-      leg: [0.2, 0.2], legW: [0.085, 0.06], footR: 0.038,
-      halo: 0.03, outline: 0.014, webW: 0.006, lensW: 0.55, lensH: 0.62,
-    },
-    palette: {
-      blue: '#1d2f8a', web: '#3a0610', emblem: '#0c0c14',
-      outline: '#16060c', halo: 'rgba(255,214,170,0.32)', lensRim: '#0c0c14', shade: 'rgba(40,0,20,0.28)',
-    },
-    // limbs: [upper rad, lower rad relative, upper len scale, lower len scale]; 0 = straight down, + = away
-    // from the body. lean = body tilt rad (+ = toward the web hand), look = head turn -1..1 (lens shows).
+    flailAmp: 0.5,
+    blue: '#1d2f8a',
+    // Joint Euler angles [x, y, z] in radians. Limbs hang down (-y) at rest; +x swings a limb backward,
+    // +z raises a right limb sideways. Left joints use the mirrored sign, so symmetric poses read alike.
+    // Swing is authored with the web in the right hand; character.js mirrors it for a left anchor.
     poses: {
-      swing: { armL: [0.75, 0.9, 1, 1], armR: [2.95, 0.12, 1, 1], legL: [0.32, -0.95, 0.9, 0.8], legR: [0.08, -0.35, 0.95, 0.9], lean: 0.22, look: 0.8, spin: 0, flail: 0 },
-      glide: { armL: [1.75, 0.25, 1, 1], armR: [1.75, 0.25, 1, 1], legL: [0.42, 0.2, 1, 1], legR: [0.42, 0.2, 1, 1], lean: 0, look: 0, spin: 0, flail: 0 },
-      roll: { armL: [0.55, -2.1, 0.85, 0.9], armR: [0.55, -2.1, 0.85, 0.9], legL: [0.45, -2.5, 0.6, 0.85], legR: [0.45, -2.5, 0.6, 0.85], lean: 0, look: 0.3, spin: 1, flail: 0 },
-      tuck: { armL: [0.35, -1.9, 0.9, 0.9], armR: [0.35, -1.9, 0.9, 0.9], legL: [0.3, -2.6, 0.45, 0.95], legR: [0.3, -2.6, 0.45, 0.95], lean: -0.1, look: -0.5, spin: 0, flail: 0 },
-      fall: { armL: [2.5, 0.7, 1, 1], armR: [2.2, 0.5, 1, 1], legL: [0.6, -0.8, 1, 0.9], legR: [0.3, -0.4, 1, 1], lean: -0.15, look: -0.6, spin: 0, flail: 1 },
+      swing: { spine: [0.15, 0, 0], neck: [-0.25, 0, 0], shL: [0.35, 0, 0.55], elL: [-0.9, 0, 0], shR: [0, 0, 2.9], elR: [0, 0, 0], hipL: [0.55, 0, 0.12], knL: [1.0, 0, 0], hipR: [0.15, 0, 0.06], knR: [0.35, 0, 0] },
+      glide: { spine: [-0.1, 0, 0], neck: [-0.7, 0, 0], shL: [-0.2, 0, 1.55], elL: [-0.25, 0, 0], shR: [-0.2, 0, 1.55], elR: [-0.25, 0, 0], hipL: [0.1, 0, 0.5], knL: [0.25, 0, 0], hipR: [0.1, 0, 0.5], knR: [0.25, 0, 0] },
+      roll: { spine: [-0.45, 0, 0], neck: [-0.3, 0, 0], shL: [-1.1, 0, 0.35], elL: [-1.9, 0, 0], shR: [-1.1, 0, 0.35], elR: [-1.9, 0, 0], hipL: [-2.1, 0, 0.18], knL: [2.4, 0, 0], hipR: [-2.1, 0, 0.18], knR: [2.4, 0, 0] },
+      tuck: { spine: [-0.6, 0, 0], neck: [-0.4, 0, 0], shL: [-1.4, 0, 0.2], elL: [-1.6, 0, 0], shR: [-1.4, 0, 0.2], elR: [-1.6, 0, 0], hipL: [-2.3, 0, 0.1], knL: [2.5, 0, 0], hipR: [-2.3, 0, 0.1], knR: [2.5, 0, 0] },
+      fall: { spine: [0.25, 0, 0], neck: [-0.5, 0, 0], shL: [0, 0, 2.5], elL: [-0.7, 0, 0], shR: [0.2, 0, 2.1], elR: [-0.5, 0, 0], hipL: [-0.5, 0, 0.35], knL: [1.1, 0, 0], hipR: [0.2, 0, 0.2], knR: [0.6, 0, 0], flail: 1 },
     },
     tricks: ['roll', 'tuck', 'glide'],
   },

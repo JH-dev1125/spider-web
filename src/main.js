@@ -4,12 +4,20 @@ import { createChargeTracker } from './input-core.js';
 import { attachKeyboard } from './keyboard.js';
 import { startHand } from './hand.js';
 import { handStatusText } from './hand-classify.js';
-import { makeCamera, drawFrame } from './render.js';
 import { createScore } from './score.js';
 
-const canvas = document.getElementById('game');
+const canvas = document.getElementById('game'); // 2D HUD overlay; the 3D scene draws on #gl below it
 const ctx = canvas.getContext('2d');
 let w = 0, h = 0;
+let renderer = null; // three.js loads from a CDN: if it fails, say so instead of a blank screen
+import('./render.js')
+  .then((m) => { renderer = m.createRenderer(document.getElementById('gl')); resize(); })
+  .catch((err) => {
+    console.error(err);
+    const p = document.body.appendChild(document.createElement('p'));
+    p.textContent = `3D 렌더러를 불러오지 못했습니다 (${err.message}). 네트워크를 확인하고 새로고침하세요.`;
+    p.style.cssText = 'position:fixed;left:0;right:0;bottom:40px;margin:0;text-align:center;color:#fff;font:16px system-ui';
+  });
 
 function resize() {
   const dpr = Math.min(CFG.maxDpr, window.devicePixelRatio || 1);
@@ -18,6 +26,7 @@ function resize() {
   canvas.width = Math.round(w * dpr);
   canvas.height = Math.round(h * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  renderer?.resize(w, h, dpr);
 }
 window.addEventListener('resize', resize);
 resize();
@@ -36,7 +45,6 @@ const now = () => performance.now() / 1000;
 
 let mode = 'title'; // 'title' | 'play' | 'over'
 let g = createGame(Date.now());
-let cam = null;
 let actions = []; // input queue for stepGame: {type:'press'|'release', ...}
 let overSec = 0;
 let result = null;
@@ -69,7 +77,6 @@ window.addEventListener('keydown', (e) => {
 
 function start() {
   g = createGame(Date.now());
-  cam = null;
   actions = [];
   tracker.cancel(); // a key held through death must not release anything on the first frame
   bot = autoplay ? createBot() : null;
@@ -176,17 +183,16 @@ function frame() {
   const dt = Math.min(CFG.maxDt, t - last); // also keeps a tab switch from becoming one huge step
   last = t;
   update(dt);
-  cam = makeCamera(g.player, cam, dt);
-  drawFrame(ctx, w, h, {
+  renderer?.render({
     player: g.player,
     buildings: g.world.buildings,
-    cam,
-    aim: null, // no charge preview: a press fires at once
+    web: g.web,
     missLine: g.missLine,
     pose: q.get('debugPose') || g.pose, // ?debugPose=<name> pins a pose for screenshots
     t,
     shake: g.shake,
-  });
+  }, dt);
+  ctx.clearRect(0, 0, w, h);
   drawHud();
   drawHandStatus();
   requestAnimationFrame(frame);
@@ -194,6 +200,6 @@ function frame() {
 if (autoplay) {
   start();
   // ?t=<sec> fast-forwards the autoplay in maxDt steps (headless screenshots barely advance rAF)
-  for (let s = 0; s < (Number(q.get('t')) || 0); s += CFG.maxDt) { update(CFG.maxDt); cam = makeCamera(g.player, cam, CFG.maxDt); }
+  for (let s = 0; s < (Number(q.get('t')) || 0); s += CFG.maxDt) update(CFG.maxDt);
 }
 requestAnimationFrame(frame);
