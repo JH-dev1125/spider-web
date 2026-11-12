@@ -1,227 +1,199 @@
+// Procedural low-poly 3D hero. three.js is passed in (createHero(THREE)) so this module stays importable in
+// Node: the pose math below is tested there. Coordinates inside the rig are three.js ones (see render.js):
+// the rig's +y is head-up and its chest faces +z.
 import { CFG } from './config.js';
 
-// Swap-out point: drawCharacter (and characterHand for the web origin). Back view ("behind the back"),
-// red/blue masked web-slinger. Poses are authored reaching right; render.js mirrors for the left.
 const K = CFG.character;
-const B = K.body;
-const P = K.palette;
-const RED = CFG.colors.suitRed;
-const LENS = CFG.colors.lens;
+const C = CFG.colors;
 const TAU = Math.PI * 2;
 
-// pose = flat numbers so poses blend with one loop: 4 limbs x [a1, a2, len1, len2], lean, look, spin, flail
-const LIMBS = ['armL', 'armR', 'legL', 'legR'];
-const LEAN = 16, LOOK = 17, SPIN = 18, FLAIL = 19;
-const POSE = {};
-for (const [name, p] of Object.entries(K.poses)) {
-  POSE[name] = Float64Array.from([...LIMBS.flatMap((k) => p[k]), p.lean, p.look, p.spin, p.flail]);
-}
-const cur = new Float64Array(POSE.glide);
-let lastT = NaN;
-let rot = 0; // roll spin angle
+export const JOINTS = ['spine', 'neck', 'shL', 'elL', 'shR', 'elR', 'hipL', 'knL', 'hipR', 'knR'];
+const SWAP = { shL: 'shR', shR: 'shL', elL: 'elR', elR: 'elL', hipL: 'hipR', hipR: 'hipL', knL: 'knR', knR: 'knL' };
+const isLeft = (j) => j.endsWith('L');
 
-// limb joints in body units: per limb [rootX, rootY, elbowX, elbowY, endX, endY]
-const J = new Float64Array(24);
-const ROOT = [[-B.shoulderX, B.shoulderY], [B.shoulderX, B.shoulderY], [-B.hipX, B.hipY], [B.hipX, B.hipY]];
-
-// precomputed web pattern on the back: radials from the emblem, sagging rings between them
-const WEB_N = 14;
-const WEB_C = [0, -0.14];
-const WEB_RINGS = [0.045, 0.09, 0.14, 0.195, 0.255];
-const WEB_COS = Float64Array.from({ length: WEB_N + 1 }, (_, i) => Math.cos((i / WEB_N) * TAU + 0.11));
-const WEB_SIN = Float64Array.from({ length: WEB_N + 1 }, (_, i) => Math.sin((i / WEB_N) * TAU + 0.11));
-const MID_COS = Float64Array.from({ length: WEB_N }, (_, i) => Math.cos(((i + 0.5) / WEB_N) * TAU + 0.11));
-const MID_SIN = Float64Array.from({ length: WEB_N }, (_, i) => Math.sin(((i + 0.5) / WEB_N) * TAU + 0.11));
-// spider emblem legs: [x0, y0, kneeX, kneeY, footX, footY] for the right side; left is mirrored
-const SPIDER_LEGS = [
-  [0.01, -0.172, 0.04, -0.2, 0.05, -0.23],
-  [0.012, -0.164, 0.045, -0.178, 0.062, -0.19],
-  [0.012, -0.156, 0.045, -0.146, 0.062, -0.13],
-  [0.01, -0.15, 0.038, -0.125, 0.048, -0.095],
-];
-
-function update(pose, t) {
-  const tgt = POSE[pose] || POSE.glide;
-  const dt = t - lastT;
-  lastT = t;
-  if (!(dt >= 0 && dt < 0.5)) { cur.set(tgt); rot = 0; return; } // first frame or a time jump: snap
-  if (dt === 0) return; // second call in the same frame
-  const a = 1 - Math.exp(-K.blendRate * dt);
-  for (let i = 0; i < cur.length; i++) cur[i] += (tgt[i] - cur[i]) * a;
-  if (tgt[SPIN]) rot = (rot + K.rollSpeed * dt) % TAU;
-  else rot += ((rot > Math.PI ? TAU : 0) - rot) * a; // settle upright the short way
-}
-
-function joints(t) {
-  const fl = cur[FLAIL] * K.flailAmp;
-  for (let i = 0; i < 4; i++) {
-    const o = i * 4, sd = i % 2 ? 1 : -1, segs = i < 2 ? B.arm : B.leg;
-    const a1 = cur[o] + fl * Math.sin(t * K.flailSpeed + i);
-    const a2 = a1 + cur[o + 1] + fl * Math.sin(t * K.flailSpeed * 1.3 + i + 1);
-    const j = i * 6, x = ROOT[i][0], y = ROOT[i][1];
-    const ex = x + sd * Math.sin(a1) * segs[0] * cur[o + 2], ey = y + Math.cos(a1) * segs[0] * cur[o + 2];
-    J[j] = x; J[j + 1] = y; J[j + 2] = ex; J[j + 3] = ey;
-    J[j + 4] = ex + sd * Math.sin(a2) * segs[1] * cur[o + 3];
-    J[j + 5] = ey + Math.cos(a2) * segs[1] * cur[o + 3];
+// Target joint Eulers for a pose, flat [x, y, z] per JOINTS entry. mirror = web in the left hand.
+export function poseTarget(pose, t, mirror, out = new Float64Array(JOINTS.length * 3)) {
+  const P = K.poses[pose] || K.poses.glide;
+  JOINTS.forEach((j, i) => {
+    const v = P[mirror && SWAP[j] ? SWAP[j] : j];
+    const s = SWAP[j] ? (isLeft(j) ? -1 : 1) : mirror ? -1 : 1; // see the config comment on mirrored signs
+    out[i * 3] = v[0];
+    out[i * 3 + 1] = v[1] * s;
+    out[i * 3 + 2] = v[2] * s;
+  });
+  if (P.flail) { // fall: arms and legs thrash out of phase
+    const f = K.flailAmp * P.flail;
+    for (const [j, axis, ph] of [['shL', 2, 0], ['shR', 2, 2], ['elL', 0, 1], ['elR', 0, 3], ['hipL', 0, 4], ['hipR', 0, 5]]) {
+      out[JOINTS.indexOf(j) * 3 + axis] += f * Math.sin(t * K.flailSpeed + ph);
+    }
   }
-}
-
-const unit = (scale) => Math.min(K.maxPx, Math.max(K.minPx, K.height * scale * K.drawScale));
-
-// Screen offset (px, unmirrored) of the web hand from the body centre, for the same pose/t as drawCharacter.
-export function characterHand(pose, t, scale, out) {
-  update(pose, t);
-  joints(t);
-  const u = unit(scale), a = cur[LEAN] + rot, c = Math.cos(a), s = Math.sin(a);
-  const x = J[10], y = J[11]; // armR end
-  out.x = (x * c - y * s) * u;
-  out.y = (x * s + y * c) * u;
   return out;
 }
 
-// ---- drawing: mode 0 = soft halo, 1 = dark outline, 2 = colour ----
-let M = 2, EX = 0;
-function style(ctx, color) {
-  const c = M === 0 ? P.halo : M === 1 ? P.outline : color;
-  ctx.strokeStyle = c;
-  ctx.fillStyle = c;
-}
-function bone(ctx, x0, y0, x1, y1, w, color) {
-  style(ctx, color);
-  ctx.lineWidth = w + EX;
-  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
-}
-function blob(ctx, x, y, rx, ry, color) {
-  style(ctx, color);
-  ctx.beginPath(); ctx.ellipse(x, y, rx + EX * 0.5, ry + EX * 0.5, 0, 0, TAU); ctx.fill();
-}
-function torsoPath(ctx) {
-  const cw = B.chestW, ww = B.waistW, top = B.shoulderY - 0.03, px = B.hipX + 0.04, py = B.hipY + 0.035;
-  ctx.beginPath();
-  ctx.moveTo(-cw, top + 0.035);
-  ctx.quadraticCurveTo(-cw, top, -0.05, top - 0.005);
-  ctx.lineTo(0.05, top - 0.005);
-  ctx.quadraticCurveTo(cw, top, cw, top + 0.035);
-  ctx.quadraticCurveTo(cw * 0.98, -0.11, ww, B.waistY);
-  ctx.lineTo(px, py);
-  ctx.quadraticCurveTo(0, py + 0.03, -px, py);
-  ctx.lineTo(-ww, B.waistY);
-  ctx.quadraticCurveTo(-cw * 0.98, -0.11, -cw, top + 0.035);
-  ctx.closePath();
-}
-function limbs(ctx, from, to) {
-  for (let i = from; i < to; i++) {
-    const j = i * 6, arm = i < 2, W = arm ? B.armW : B.legW;
-    bone(ctx, J[j], J[j + 1], J[j + 2], J[j + 3], W[0], P.blue);
-    bone(ctx, J[j + 2], J[j + 3], J[j + 4], J[j + 5], W[1], RED);
-    const r = arm ? B.handR : B.footR;
-    blob(ctx, J[j + 4], J[j + 5], r, arm ? r : r * 1.15, RED);
-  }
-}
-function core(ctx) { // legs, torso, neck, head
-  limbs(ctx, 2, 4);
-  style(ctx, RED);
-  torsoPath(ctx);
-  ctx.fill();
-  if (EX) { ctx.lineWidth = EX; ctx.stroke(); }
-  bone(ctx, 0, B.shoulderY - 0.02, 0, B.headY + B.headR * 0.6, 0.05, RED);
-  blob(ctx, 0, B.headY, B.headR * 0.92, B.headR * 1.06, RED);
+// Frame-rate independent ease of cur toward target.
+export function blendPose(cur, target, dt) {
+  const a = 1 - Math.exp(-K.blendRate * dt);
+  for (let i = 0; i < cur.length; i++) cur[i] += (target[i] - cur[i]) * a;
+  return cur;
 }
 
-function backDetails(ctx) {
-  ctx.save();
-  torsoPath(ctx);
-  ctx.clip();
-  // blue side panels and a shaded flank away from the sunset
-  ctx.fillStyle = P.blue;
-  ctx.beginPath();
-  for (const s of [-1, 1]) {
-    ctx.moveTo(s * (B.chestW + 0.01), B.shoulderY + 0.01);
-    ctx.lineTo(s * B.chestW * 0.62, B.shoulderY + 0.05);
-    ctx.lineTo(s * B.waistW * 0.55, B.waistY + 0.06);
-    ctx.lineTo(s * (B.waistW + 0.05), B.waistY + 0.06);
+// Trick flip angle (one full turn over CFG.trickSec, eased) for roll/tuck, 0 otherwise.
+export function flipAngle(pose, sec) {
+  if (pose !== 'roll' && pose !== 'tuck') return 0;
+  const p = Math.min(1, Math.max(0, sec / CFG.trickSec));
+  return TAU * p * p * (3 - 2 * p);
+}
+
+// ---- textures, made once ----
+function canvasTex(THREE, w, h, draw) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+function webLines(g, cx, cy, r, n, rings) { // radials + sagging rings around (cx, cy)
+  g.beginPath();
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * TAU;
+    g.moveTo(cx, cy); g.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
   }
-  ctx.fill();
-  ctx.fillStyle = P.shade;
-  ctx.fillRect(-0.3, -0.4, 0.3, 0.5);
-  // web lines
-  ctx.strokeStyle = P.web;
-  ctx.lineWidth = B.webW;
-  ctx.beginPath();
-  const cx = WEB_C[0], cy = WEB_C[1], rMax = WEB_RINGS[WEB_RINGS.length - 1] * 1.6;
-  for (let i = 0; i < WEB_N; i++) { ctx.moveTo(cx, cy); ctx.lineTo(cx + WEB_COS[i] * rMax, cy + WEB_SIN[i] * rMax); }
-  for (const r of WEB_RINGS) {
-    for (let i = 0; i < WEB_N; i++) {
-      ctx.moveTo(cx + WEB_COS[i] * r, cy + WEB_SIN[i] * r);
-      ctx.quadraticCurveTo(cx + MID_COS[i] * r * 0.84, cy + MID_SIN[i] * r * 0.84, cx + WEB_COS[i + 1] * r, cy + WEB_SIN[i + 1] * r);
+  for (let k = 1; k <= rings; k++) {
+    const rr = (r * k) / rings;
+    for (let i = 0; i <= n; i++) {
+      const a = (i / n) * TAU, am = ((i - 0.5) / n) * TAU, rs = rr * 0.86;
+      if (i === 0) g.moveTo(cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
+      else g.quadraticCurveTo(cx + Math.cos(am) * rs, cy + Math.sin(am) * rs, cx + Math.cos(a) * rr, cy + Math.sin(a) * rr);
     }
   }
-  ctx.stroke();
-  // spider emblem
-  ctx.strokeStyle = P.emblem;
-  ctx.lineWidth = 0.009;
-  ctx.beginPath();
-  for (const s of [-1, 1]) {
-    for (const l of SPIDER_LEGS) {
-      ctx.moveTo(s * l[0], l[1]); ctx.lineTo(s * l[2], l[3]); ctx.lineTo(s * l[4], l[5]);
+  g.stroke();
+}
+function spider(g, x, y, s) { // emblem: body + 8 bent legs
+  g.fillStyle = C.suitBlack; g.strokeStyle = C.suitBlack; g.lineWidth = s * 0.12;
+  g.beginPath(); g.ellipse(x, y - s * 0.25, s * 0.22, s * 0.3, 0, 0, TAU); g.ellipse(x, y + s * 0.45, s * 0.28, s * 0.5, 0, 0, TAU); g.fill();
+  for (const sd of [-1, 1]) for (let i = 0; i < 4; i++) {
+    const y0 = y - s * 0.3 + i * s * 0.22, kx = x + sd * s * 0.9, ky = y0 + (i < 2 ? -s * 0.5 : s * 0.5);
+    g.beginPath(); g.moveTo(x, y0); g.lineTo(kx, ky); g.lineTo(x + sd * s * 1.1, ky + (i < 2 ? s * 0.6 : s * 0.9)); g.stroke();
+  }
+}
+const redWeb = (g, w, h) => {
+  g.fillStyle = C.suitRed; g.fillRect(0, 0, w, h);
+  g.strokeStyle = C.suitDark; g.lineWidth = 2;
+  webLines(g, w / 2, h / 2, w * 0.75, 10, 5);
+};
+
+// CapsuleGeometry/SphereGeometry u = 0 faces +z (the chest), 0.5 faces -z (the back).
+function torsoTex(g, w, h) {
+  redWeb(g, w, h);
+  g.fillStyle = K.blue; // blue side panels
+  for (const u of [0.25, 0.75]) g.fillRect(w * (u - 0.09), 0, w * 0.18, h);
+  for (const x of [0, w, w / 2]) spider(g, x, h * 0.4, h * 0.11); // chest (u = 0, wraps to 1) and back
+}
+
+export function createHero(THREE) {
+  const red = new THREE.MeshLambertMaterial({ map: canvasTex(THREE, 128, 128, redWeb), emissive: 0x2a0408 });
+  const torsoMat = new THREE.MeshLambertMaterial({ map: canvasTex(THREE, 256, 256, torsoTex), emissive: 0x2a0408 });
+  const blue = new THREE.MeshLambertMaterial({ color: K.blue, emissive: 0x060a24 });
+  const black = new THREE.MeshBasicMaterial({ color: C.suitBlack });
+  const lens = new THREE.MeshBasicMaterial({ color: C.lens });
+
+  const root = new THREE.Group(); // position + eased orientation
+  const body = new THREE.Group(); // trick flips
+  root.add(body);
+  const joint = (parent, x, y, z = 0) => { const o = new THREE.Object3D(); o.position.set(x, y, z); parent.add(o); return o; };
+  const mesh = (parent, geo, mat, y, sx = 1, sy = 1, sz = 1) => {
+    const m = new THREE.Mesh(geo, mat); m.position.y = y; m.scale.set(sx, sy, sz); parent.add(m); return m;
+  };
+  const cap = (r, len) => new THREE.CapsuleGeometry(r, len, 3, 8);
+  const ball = new THREE.SphereGeometry(1, 12, 8);
+
+  // pelvis at the root = player.pos; ~1.85 m from boots to head top
+  mesh(body, ball, blue, -0.02, 0.17, 0.13, 0.13);
+  const J = {};
+  J.spine = joint(body, 0, 0.05);
+  mesh(J.spine, cap(0.16, 0.26), torsoMat, 0.25, 1.25, 1, 0.78);
+  J.neck = joint(J.spine, 0, 0.55);
+  const head = mesh(J.neck, ball, red, 0.13, 0.115, 0.135, 0.12);
+  for (const sd of [-1, 1]) { // tear-shaped lenses with a black rim, angled like the mask's eyes
+    const rim = mesh(head, ball, black, 0.08, 0.42, 0.52, 0.25);
+    rim.position.set(sd * 0.4, 0.08, 0.86); rim.rotation.z = sd * 0.5;
+    const l = mesh(rim, ball, lens, 0, 0.82, 0.82, 0.8); l.position.z = 0.25;
+  }
+  for (const sd of [-1, 1]) {
+    const s = sd < 0 ? 'L' : 'R';
+    const sh = J['sh' + s] = joint(J.spine, sd * 0.22, 0.46);
+    mesh(sh, cap(0.058, 0.2), red, -0.14);
+    const el = J['el' + s] = joint(sh, 0, -0.29);
+    mesh(el, cap(0.05, 0.2), red, -0.13);
+    mesh(el, ball, red, -0.29, 0.06, 0.07, 0.05);
+    J['hand' + s] = joint(el, 0, -0.31);
+    const hip = J['hip' + s] = joint(body, sd * 0.1, -0.08);
+    mesh(hip, cap(0.08, 0.3), blue, -0.22);
+    const kn = J['kn' + s] = joint(hip, 0, -0.44);
+    mesh(kn, cap(0.066, 0.3), blue, -0.2);
+    const boot = mesh(kn, cap(0.07, 0.14), red, -0.36); // red boot over the shin end
+    boot.position.z = 0.02;
+  }
+
+  const cur = poseTarget('glide', 0, false);
+  const target = new Float64Array(cur.length);
+  const q = new THREE.Quaternion(), qAim = new THREE.Quaternion(), qPar = new THREE.Quaternion();
+  const vU = new THREE.Vector3(), vF = new THREE.Vector3(), vX = new THREE.Vector3(), vV = new THREE.Vector3();
+  const vS = new THREE.Vector3(), vD = new THREE.Vector3(), m = new THREE.Matrix4();
+  const DOWN = new THREE.Vector3(0, -1, 0), UP = new THREE.Vector3(0, 1, 0), FWD = new THREE.Vector3(0, 0, -1);
+  const AX_X = new THREE.Vector3(1, 0, 0), AX_Z = new THREE.Vector3(0, 0, 1);
+  let pose = null, poseSec = 0, mirror = false, ikW = 0, first = true;
+
+  // basis: rig +y along u, chest (+z) toward f (orthogonalised against u)
+  function aimBasis(u, f, out) {
+    vU.copy(u).normalize();
+    vF.copy(f).addScaledVector(vU, -f.dot(vU));
+    if (vF.lengthSq() < 1e-6) vF.copy(FWD).addScaledVector(vU, -FWD.dot(vU));
+    if (vF.lengthSq() < 1e-6) vF.set(0, -1, 0); // u straight along -z: chest down
+    vF.normalize();
+    vX.crossVectors(vU, vF);
+    return out.setFromRotationMatrix(m.makeBasis(vX, vU, vF));
+  }
+
+  // pos/vel/anchor/aimAt are three.js coords (Vector3); aimAt = where the web arm points, or null.
+  function update(poseName, t, dt, pos, vel, anchor, aimAt, out) {
+    if (poseName !== pose) { pose = poseName; poseSec = 0; } else poseSec += dt;
+    const aim = anchor || aimAt;
+    if (aim) mirror = aim.x < pos.x;
+    blendPose(cur, poseTarget(pose, t, mirror, target), first ? 1e9 : dt);
+    JOINTS.forEach((j, i) => J[j].rotation.set(cur[i * 3], cur[i * 3 + 1], cur[i * 3 + 2]));
+
+    // body orientation: hang under the rope, spread flat in a glide, upright for tricks and falls
+    vV.copy(vel);
+    const horiz = vS.set(vel.x, 0, vel.z);
+    if (anchor) aimBasis(vD.subVectors(anchor, pos), vV, q);
+    else if (pose === 'glide') aimBasis(vV.lengthSq() > 1 ? vV : FWD, vD.set(0, -1, 0), q);
+    else aimBasis(vD.copy(UP).addScaledVector(horiz.normalize(), 0.35), horiz, q);
+    if (first) root.quaternion.copy(q);
+    else root.quaternion.slerp(q, 1 - Math.exp(-K.turnRate * dt));
+    const flip = flipAngle(pose, poseSec); // on a child node so it never feeds back into the eased base
+    if (pose === 'tuck') body.quaternion.setFromAxisAngle(AX_X, flip);
+    else body.quaternion.setFromAxisAngle(AX_Z, mirror ? flip : -flip);
+    root.position.copy(pos);
+    root.updateMatrixWorld(true);
+
+    // IK-lite: point the web arm's shoulder straight at the anchor (or the flying web's target)
+    ikW += ((aim ? 1 : 0) - ikW) * (first ? 1 : 1 - Math.exp(-K.blendRate * dt));
+    const sh = mirror ? J.shL : J.shR;
+    if (aim && ikW > 0.01) {
+      sh.getWorldPosition(vS);
+      J.spine.getWorldQuaternion(qPar).invert();
+      vD.subVectors(aim, vS).applyQuaternion(qPar).normalize();
+      qAim.setFromUnitVectors(DOWN, vD);
+      sh.quaternion.slerp(qAim, ikW);
+      (mirror ? J.elL : J.elR).rotation.set(0, 0, 0);
+      sh.updateMatrixWorld(true);
     }
+    first = false;
+    return (mirror ? J.handL : J.handR).getWorldPosition(out);
   }
-  ctx.stroke();
-  ctx.fillStyle = P.emblem;
-  ctx.beginPath();
-  ctx.ellipse(0, -0.178, 0.014, 0.016, 0, 0, TAU);
-  ctx.moveTo(0.02, -0.135);
-  ctx.ellipse(0, -0.135, 0.02, 0.033, 0, 0, TAU);
-  ctx.fill();
-  ctx.restore();
-}
 
-function headDetails(ctx) {
-  const hy = B.headY, hr = B.headR;
-  ctx.save();
-  ctx.beginPath();
-  ctx.ellipse(0, hy, hr * 0.92, hr * 1.06, 0, 0, TAU);
-  ctx.clip();
-  ctx.strokeStyle = P.web;
-  ctx.lineWidth = B.webW;
-  ctx.beginPath();
-  for (let i = 0; i < WEB_N; i += 2) { ctx.moveTo(0, hy - hr * 0.1); ctx.lineTo(WEB_COS[i] * hr * 1.3, hy - hr * 0.1 + WEB_SIN[i] * hr * 1.3); }
-  for (const r of [0.35, 0.7]) {
-    ctx.moveTo(hr * r, hy - hr * 0.1);
-    ctx.ellipse(0, hy - hr * 0.1, hr * r, hr * r * 1.1, 0, 0, TAU);
-  }
-  ctx.stroke();
-  ctx.restore();
-  // big lenses peek past the mask outline; the side he looks toward shows more
-  const look = cur[LOOK];
-  for (const s of [-1, 1]) {
-    const v = Math.max(0, s * look);
-    const x = s * hr * (0.98 - 0.35 * v), y = hy - hr * 0.08;
-    const rx = hr * (0.1 + B.lensW * v), ry = hr * B.lensH * (0.75 + 0.25 * v), tilt = s * 0.45;
-    ctx.fillStyle = P.lensRim;
-    ctx.beginPath(); ctx.ellipse(x, y, rx + 0.009, ry + 0.009, tilt, 0, TAU); ctx.fill();
-    ctx.fillStyle = LENS;
-    ctx.beginPath(); ctx.ellipse(x, y, rx, ry, tilt, 0, TAU); ctx.fill();
-  }
-}
-
-export function drawCharacter(ctx, sx, sy, scale, pose, t) {
-  update(pose, t);
-  joints(t);
-  const u = unit(scale);
-  ctx.save();
-  ctx.translate(sx, sy);
-  ctx.scale(u, u);
-  ctx.rotate(cur[LEAN] + rot);
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  M = 0; EX = B.halo * 2; core(ctx); limbs(ctx, 0, 2);
-  M = 1; EX = B.outline * 2; core(ctx);
-  M = 2; EX = 0; core(ctx);
-  backDetails(ctx);
-  headDetails(ctx);
-  // arms last, each with its own outline so they separate from the back
-  M = 1; EX = B.outline * 2; limbs(ctx, 0, 2);
-  M = 2; EX = 0; limbs(ctx, 0, 2);
-  ctx.restore();
+  return { root, update };
 }
