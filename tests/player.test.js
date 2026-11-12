@@ -9,8 +9,8 @@ const W = CFG.corridorHalfWidth;
 const V = CFG.baseSpeed;
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const towers = [
-  { side: 'R', z0: 5, z1: 200, h: 90 },
-  { side: 'L', z0: 5, z1: 200, h: 90 },
+  { side: 'R', z0: 5, z1: 200, h: CFG.ceiling },
+  { side: 'L', z0: 5, z1: 200, h: CFG.ceiling },
 ];
 const webFrom = (p, side, level) => castWeb(p.pos, aimVector(side, level), CFG.webRange, towers);
 

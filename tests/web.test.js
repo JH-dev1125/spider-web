@@ -25,13 +25,13 @@ test('chargeLength', () => {
 test('castWeb', () => {
   const o = { x: 0, y: 40, z: 0 };
   const d = aimVector('R', 'mid');
-  const b = { side: 'R', z0: 5, z1: 30, h: 80 };
+  const b = { side: 'R', z0: 5, z1: 50, h: 80 };
   const p = castWeb(o, d, CFG.chargeMax, [b]);
   assert.equal(p.x, CFG.corridorHalfWidth);
-  assert.ok(p.z >= 5 && p.z <= 30);
+  assert.ok(p.z >= 5 && p.z <= 50);
   assert.equal(castWeb(o, d, 5, [b]), null);
   assert.equal(castWeb(o, d, CFG.chargeMax, [{ ...b, h: 10 }]), null);
   assert.equal(castWeb(o, d, CFG.chargeMax, [{ ...b, side: 'L' }]), null);
   const far = { side: 'R', z0: 60, z1: 90, h: 80 };
-  assert.ok(castWeb(o, d, 200, [far, b]).z < 30);
+  assert.ok(castWeb(o, d, 200, [far, b]).z < 50);
 });

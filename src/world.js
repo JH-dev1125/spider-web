@@ -47,8 +47,8 @@ export const updateWorld = (world, playerZ, elapsedSec, rng) => {
       const first = !world.buildings.some((b) => b.side === side);
       const z0 = world.nextZ[side] + (first ? 0 : lerp(d.gapMin, d.gapMax, rng()));
       const z1 = z0 + lerp(d.lenMin, d.lenMax, rng());
-      // first building per side is always swingable from the start
-      const h = lerp(first ? CFG.startHeight : d.hMin, d.hMax, rng());
+      // first building per side is always swingable from the start (a hi web lands ~40 m above the hand)
+      const h = lerp(first ? 2 * CFG.startHeight : d.hMin, d.hMax, rng());
       world.buildings.push({ side, z0, z1, h });
       world.nextZ[side] = z1;
     }

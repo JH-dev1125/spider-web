@@ -9,8 +9,8 @@ export const CFG = deepFreeze({
   corridorHalfWidth: 14,
   viewDistance: 260,
   behindDistance: 40,
-  startHeight: 45,
-  ceiling: 140,
+  startHeight: 60, // forward webs mean long ropes: start higher so the first swings clear the street
+  ceiling: 160, // hMax = 144: room for hi anchors ~40 m above the hand
   baseSpeed: 22,
   maxSpeed: 60,
   speedRampPerSec: 0.25,
@@ -23,18 +23,18 @@ export const CFG = deepFreeze({
   gapMaxEnd: 40,
   lenMin: 30,
   lenMax: 80,
-  hMinStartFactor: 0.9, // Task 7 fix 1: was 0.8 (1.4 in round 0)
-  hMinEndFactor: 0.5,
+  hMinStartFactor: 1.6, // 96 m early: hi from the start height (anchor ~100 m) usually lands
+  hMinEndFactor: 1.1,
   hMaxFactor: 0.9,
-  aimYawDeg: 55, // Task 7 (was 40): a ~0.6 s charge must reach the far wall after a swing leaves you on the near one
-  aimPitchDeg: { hi: 30, mid: 0, lo: -35 }, // Task 7: hi was 35 and overshot rooftops
+  aimYawDeg: 25, // angle off straight-ahead: from the corridor centre every level lands 14/tan(25) = 30 m ahead
+  aimPitchDeg: { hi: 50, mid: 0, lo: -35 }, // hi 50: sin(50) ~ reelFactor, so a hi swing bottoms at the press height
   chargeMin: 12,
   chargeMax: 70,
   chargeFullSec: 1.0, // chargeMin/Max/FullSec: legacy charge preview (render.js chargeLength), unused by play
-  webRange: 70, // every web flies this far at once
-  reelFactor: 0.8, // was 0.85; 0.85 let the hold-release bot survive only 20/40 tuning seeds, 0.8 gives 40/40
+  webRange: 85, // reaches the far wall from ~8 m off centre; longer cross shots dropped the bot into the street
+  reelFactor: 0.8, // swing bottom = press height + t*(sin(pitch) - reelFactor), t = web length
   minRopeLen: 3,
-  releaseBoostUp: 9, // was 6; adds margin when the release is a bit early or late (see controls-report)
+  releaseBoostUp: 6, // was 9; with level hi swings 9 pumped the hero above the rooftops (hi then misses)
   releaseBoostForward: 4,
   wallBounceLoss: 0.5,
   wallSkin: 0.05,
