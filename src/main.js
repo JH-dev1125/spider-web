@@ -183,7 +183,7 @@ function frame() {
     cam,
     aim: mode === 'play' ? tracker.state(t) : null,
     missLine: g.missLine,
-    pose: g.pose,
+    pose: q.get('debugPose') || g.pose, // ?debugPose=<name> pins a pose for screenshots
     t,
     shake: g.shake,
   });
