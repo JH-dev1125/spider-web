@@ -142,3 +142,13 @@ test('touching the street is death: one dead event, the rope goes, the body stop
   assert.equal(p.anchor, null);
   assert.deepEqual(p.vel, { x: 0, y: 0, z: 0 });
 });
+
+test('landing on a roof never leaves the hero stuck: he runs forward off the edge', () => {
+  const p = createPlayer();
+  p.pos = { x: 0, y: 30 + CFG.heroRadius, z: 0 };
+  p.vel = { x: 0, y: 0, z: 0 };
+  const ph = createPhysics(p);
+  syncStructures(ph, [{ id: 'roof', kind: 'tower', min: { x: -10, y: 0, z: -5 }, max: { x: 10, y: 30, z: 20 }, attach: true }]);
+  for (let i = 0; i < 60 * 4 && p.alive; i++) stepPhysics(ph, p, 1 / 60);
+  assert.ok(p.pos.z > 20 || !p.alive, `still on the roof at z=${p.pos.z}`);
+});

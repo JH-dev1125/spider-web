@@ -9,6 +9,7 @@ export const CFG = deepFreeze({
   physicsStep: 1 / 120, // fixed step: each frame runs whole steps off an accumulator, so a dt sequence replays exactly
   gravity: 9.81,
   heroMass: 80,
+  roofRunSpeed: 10, // m/s: landed on a roof without a rope, the hero runs forward and drops off the edge
   heroRadius: 0.5, // the hero's collision sphere
   airDrag: 0.003, // 1/m: quadratic drag, a = airDrag * v^2 (0.5 rho Cd A / m); terminal speed sqrt(g / airDrag) = 57 m/s
   heroFriction: 0, // the hero slides along facades instead of sticking
@@ -113,8 +114,8 @@ export const CFG = deepFreeze({
     lookUp: 0.6,
     camWallGap: 4, // m: the camera stays this far inside the corridor walls
     camSnap: 80, // m: a bigger jump (restart) snaps the camera instead of easing
-    fovMin: 58,
-    fovMax: 84,
+    fovMin: 60, // a normal lens: anchors ~52 m ahead are already in view looking forward
+    fovMax: 68, // only a slight widening with speed; more reads as fisheye distortion
     near: 0.1,
     far: 1700,
     fogDensity: 0.0042, // exp2: ~66% hazed at the 260 m spawn horizon, opaque by ~400 m

@@ -62,6 +62,8 @@ export function syncStructures(ph, structures) {
   for (const [id, body] of ph.boxes) if (!live.has(id)) { ph.world.removeBody(body); ph.boxes.delete(id); }
 }
 
+const DOWN = { x: 0, y: -1, z: 0 };
+
 // Closest hit of a web from `from` along unit `dir`: {point, attach} (the street and frame beams don't hold), or null.
 export function raycast(ph, from, dir, range) {
   const r = new CANNON.RaycastResult();
@@ -131,6 +133,10 @@ export function stepPhysics(ph, p, dt) {
     if (ph.rope) {
       if (v.y <= 0) p.sawDescent = true;
       if (p.swingPhase === 'descending' && p.sawDescent && v.y > 0) { p.swingPhase = 'ascending'; events.push('bottom'); }
+    }
+    // standing on a roof with no rope: run forward so a landing never leaves the hero stuck
+    if (!ph.rope && hero.position.y > 1 && raycast(ph, hero.position, DOWN, CFG.heroRadius + 0.15)) {
+      v.z = Math.max(v.z, CFG.roofRunSpeed);
     }
     if (hero.position.y <= CFG.heroRadius + 0.05) { // touching the street
       release(ph, p);

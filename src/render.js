@@ -469,7 +469,7 @@ export function createRenderer(canvas) {
   function render(view, dt) {
     const p = view.player;
     const web = view.web ?? null;
-    cam = followCamera(p, cam, dt, web?.to || p.anchor, camera.aspect);
+    cam = followCamera(p, cam, dt);
     const [sx, sy] = shakeOffset(view.shake || 0, view.t);
     camera.position.set(cam.x, cam.y, -cam.z);
     camera.lookAt(cam.lx, cam.ly, -cam.lz);
