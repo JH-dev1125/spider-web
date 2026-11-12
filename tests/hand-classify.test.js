@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyHand, createGestureGate, createHandController, mirror } from '../src/hand-classify.js';
+import { classifyHand, createGestureGate, createHandController, mirror, fingerBends, gestureFromBends } from '../src/hand-classify.js';
 import { createChargeTracker } from '../src/input-core.js';
 import { hand, SHOOT, FIST, OPEN, NONE } from './hand-fixture.js';
 
@@ -16,7 +16,7 @@ test('classifyHand side/level from wrist in mirrored screen space', () => {
   assert.deepEqual(classifyHand(hand(0.2, 0.1, SHOOT), 'Right'), { gesture: 'shoot', side: 'L', level: 'hi' });
   assert.deepEqual(classifyHand(hand(0.8, 0.9, FIST), 'Left'), { gesture: 'fist', side: 'R', level: 'lo' });
   assert.equal(classifyHand(hand(0.3, 0.5, FIST), 'Left').level, 'mid');
-  // handedness is ignored: same position, other label, same side
+  // a bare label (no score) is not trusted: same position, other label, same side
   assert.equal(classifyHand(hand(0.2, 0.5, FIST), 'Left').side, 'L');
 });
 
@@ -156,4 +156,126 @@ test('handStatusText: Korean labels', () => {
   assert.equal(handStatusText(null), '손 없음');
   assert.equal(handStatusText({ hands: 1, gesture: 'shoot', side: 'L', level: 'hi' }), '발사 · 왼 · 위');
   assert.equal(handStatusText({ hands: 1, gesture: 'open', side: 'R', level: 'lo' }), '손바닥 · 오 · 아래');
+});
+
+// Realistic poses: the canonical hand rotated, flipped, scaled and depth-squashed. Joint angles in 3D
+// do not change under any of these, so every pose must read the same.
+const POSES = {
+  'palm to camera': {},
+  'back to camera': { yaw: 180 },
+  'yaw 40': { yaw: 40 },
+  'yaw -45': { yaw: -45 },
+  'pitch 35 (fingers toward camera)': { pitch: 35 },
+  'pitch -30': { pitch: -30 },
+  'roll 45': { roll: 45 },
+  'tilted 30/30/30': { yaw: 30, pitch: 30, roll: 30 },
+  'small (far)': { scale: 0.5 },
+  'large (near)': { scale: 1.6 },
+  'depth squashed x0.4': { zScale: 0.4, yaw: 35 },
+  'thumb tucked': { thumb: 'in' },
+};
+for (const left of [false, true]) {
+  for (const [name, pose] of Object.entries(POSES)) {
+    test(`classifyHand ${left ? 'left' : 'right'} hand, ${name}`, () => {
+      const at = (ext, o = {}) => classifyHand(hand(0.5, 0.5, ext, { ...pose, left, ...o }), null).gesture;
+      assert.equal(at(SHOOT), 'shoot');
+      assert.equal(at(SHOOT, { curl: { m: 0.45, r: 0.45 } }), 'shoot', 'thwip with middle/ring only half bent');
+      assert.equal(at(SHOOT, { thumb: 'in' }), 'shoot', 'thumb is don\'t-care');
+      assert.equal(at(OPEN), 'open');
+      assert.equal(at(FIST), 'fist');
+      assert.equal(at(NONE), 'none');
+      assert.equal(at('i'), 'none');
+      assert.equal(at('imp'), 'none', 'ring alone folded is not shoot');
+    });
+  }
+}
+
+test('fingerBends: straight ~0, folded onto the palm >100, same for the mirror image', () => {
+  const b = fingerBends(hand(0.5, 0.5, SHOOT));
+  assert.ok(b[0] < 15 && b[3] < 15 && b[1] > 100 && b[2] > 100, `${b}`);
+  assert.deepEqual(fingerBends(hand(0.5, 0.5, SHOOT, { left: true })).map(Math.round), b.map(Math.round));
+});
+
+test('gestureFromBends: open and shoot are disjoint, hysteresis keeps the held gesture', () => {
+  assert.equal(gestureFromBends([10, 35, 35, 10]), 'none'); // between open and shoot
+  assert.equal(gestureFromBends([10, 35, 35, 10], 'shoot'), 'shoot'); // already shooting: stays
+  assert.equal(gestureFromBends([10, 25, 25, 10], 'shoot'), 'open'); // clearly straight: leaves
+  assert.equal(gestureFromBends([65, 120, 120, 10]), 'none');
+  assert.equal(gestureFromBends([65, 120, 120, 10], 'shoot'), 'shoot');
+  assert.equal(gestureFromBends([33, 33, 33, 33]), 'none');
+  assert.equal(gestureFromBends([33, 33, 33, 33], 'open'), 'open');
+});
+
+test('side follows the hand used (MediaPipe label swapped for the raw camera), screen half as fallback', () => {
+  const R = { categoryName: 'Left', score: 0.95 }, L = { categoryName: 'Right', score: 0.95 };
+  // the user's right hand reaching across to the left half still shoots right, and vice versa
+  assert.equal(classifyHand(hand(0.3, 0.5, SHOOT), R).side, 'R');
+  assert.equal(classifyHand(hand(0.7, 0.5, SHOOT, { left: true }), L).side, 'L');
+  // unsure label: screen half
+  assert.equal(classifyHand(hand(0.3, 0.5, SHOOT), { ...R, score: 0.6 }).side, 'L');
+  assert.equal(classifyHand(hand(0.7, 0.5, SHOOT), { ...L, score: 0.6 }).side, 'R');
+});
+
+// Both hands, mirrored positions and labels: identical timing, opposite sides.
+for (const [label, x, side] of [['Right', 0.3, 'L'], ['Left', 0.7, 'R']]) {
+  test(`controller symmetric: user's ${side === 'L' ? 'left' : 'right'} hand presses on frame 2, releases on frame 3`, () => {
+    const tr = createChargeTracker();
+    const log = [];
+    const ctrl = createHandController(tr, { onShot: (s) => log.push(s) });
+    const h = (ext) => [{ landmarks: hand(x, 0.2, ext, { left: side === 'L', yaw: 30 }), handedness: { categoryName: label, score: 0.9 } }];
+    let t = 0;
+    ctrl.update(h(SHOOT), t += DT);
+    assert.equal(log.length, 0);
+    ctrl.update(h(SHOOT), t += DT);
+    assert.deepEqual(log, [{ type: 'press', side, level: 'hi' }]);
+    ctrl.update(h(OPEN), t += DT); ctrl.update(h(OPEN), t += DT);
+    assert.equal(log.length, 1);
+    ctrl.update(h(OPEN), t += DT);
+    assert.equal(log[1].type, 'release');
+    assert.equal(log[1].side, side);
+  });
+}
+
+test('controller: two hands with the same label fall back to screen halves', () => {
+  const tr = createChargeTracker();
+  const log = [];
+  const ctrl = createHandController(tr, { onShot: (s) => log.push(s) });
+  const same = { categoryName: 'Left', score: 0.99 };
+  for (let k = 0; k < 2; k++) ctrl.update([
+    { landmarks: hand(0.2, 0.5, SHOOT, { left: true }), handedness: same },
+    { landmarks: hand(0.8, 0.5, FIST), handedness: same },
+  ], k * DT);
+  assert.equal(log[0].side, 'L');
+});
+
+// "The HUD shows 발사 but no web fires": the game drops presses outside play and clears the tracker on
+// start, so a gesture made on the title (or held through death) never reached the game; and the HUD's
+// sticky gate could keep showing 발사 after the controller had released. Invariant: whenever the status
+// says 'shoot', the game (onShot while playing) has received a press since the gesture started.
+test('controller: HUD shoot implies a press reached the game, even across start and death', () => {
+  const tr = createChargeTracker();
+  let playing = false, got = [];
+  const ctrl = createHandController(tr, { onShot: (a) => { if (playing) got.push(a); } }); // main.js gate
+  const step = (ext, t) => ctrl.update([{ landmarks: hand(0.7, 0.5, ext), handedness: 'Right' }], t);
+  let t = 0;
+  step(SHOOT, t += DT);
+  for (let k = 0; k < 4; k++) assert.equal(step(SHOOT, t += DT).gesture, 'shoot'); // on the title
+  playing = true; tr.cancel(); // main.js start()
+  assert.equal(step(SHOOT, t += DT).gesture, 'shoot');
+  assert.deepEqual(got, [{ type: 'press', side: 'R', level: 'mid' }]);
+  playing = false; tr.cancel(); // death
+  step(SHOOT, t += DT);
+  playing = true; tr.cancel(); got = []; // restart, still holding
+  step(SHOOT, t += DT);
+  assert.equal(got[0]?.type, 'press');
+  // let go with a flickering none/open: released, and the HUD must stop saying shoot
+  let st;
+  for (const ext of [NONE, OPEN, NONE]) st = step(ext, t += DT);
+  assert.equal(got.at(-1).type, 'release');
+  assert.notEqual(st.gesture, 'shoot');
+  // any frame the HUD says shoot, the last action the game got is a press
+  for (const ext of [SHOOT, NONE, SHOOT, SHOOT, OPEN, SHOOT, NONE, NONE, NONE, SHOOT, SHOOT]) {
+    st = step(ext, t += DT);
+    if (st.gesture === 'shoot') assert.equal(got.at(-1).type, 'press');
+  }
 });

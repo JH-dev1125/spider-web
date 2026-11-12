@@ -61,6 +61,24 @@ test('startHand: lost-hand check keeps running while the camera stalls', async (
   assert.equal(env.errors.length, 0);
 });
 
+test('startHand: with requestVideoFrameCallback, detects once per video frame and presses on the 2nd', async () => {
+  let calls = 0, vfcQ = [];
+  const env = setup(() => { calls++; return shootFrame(); });
+  env.video.requestVideoFrameCallback = (f) => vfcQ.push(f);
+  env.video.cancelVideoFrameCallback = () => { vfcQ = []; };
+  const handle = await env.start();
+  const videoFrame = () => { env.t += 1 / 30; const q = vfcQ; vfcQ = []; q.forEach((f) => f()); tick(); };
+  videoFrame();
+  assert.equal(env.tracker.state(env.t), null);
+  videoFrame();
+  assert.equal(calls, 2);
+  assert.ok(env.tracker.state(env.t), 'pressed on the second frame');
+  for (let k = 0; k < 5; k++) tick(); // rAF without a new video frame: no extra detection
+  assert.equal(calls, 2);
+  handle.stop();
+  assert.equal(vfcQ.length, 0);
+});
+
 test('startHand rejects without getUserMedia', async () => {
   const env = setup(shootFrame);
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {} });

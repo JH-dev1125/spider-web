@@ -14,6 +14,7 @@
   #grid .now { background: rgba(255,255,255,.12); }
   #grid .aim { background: rgba(255,213,74,.45); }
   #info { font-size: 40px; font-weight: bold; line-height: 1.4; }
+  #hands { font: 18px ui-monospace, monospace; margin-top: 12px; }
   #err { color: #ff7a7a; font-size: 24px; }
   button { font-size: 20px; margin-top: 16px; }
 </style>
@@ -23,12 +24,17 @@
 <div>
   <div id="info">카메라 준비 중…</div>
   <div id="err"></div>
+  <div id="hands"></div>
   <button id="mode">모드: shoot (검지·새끼)</button>
-  <p>충전 제스처를 유지하면 노란 칸에 조준, 풀면 발사.<br>마지막 발사: <span id="last">-</span></p>
+  <p>bend: 0 = 곧게 폄, 130 = 손바닥까지 접음. 발사 = 검지·새끼 &lt; 60 이고 중지·약지 &gt; 40,
+  손바닥 = 넷 다 &lt; 30 (src/config.js 의 hand*Deg).<br>
+  label Left = 사용자의 오른손 (원본 카메라 기준이라 뒤바뀜). score &lt; 0.8 이면 화면 절반으로 방향 결정.<br>
+  충전 제스처를 유지하면 노란 칸에 조준, 풀면 발사.<br>마지막 발사: <span id="last">-</span></p>
 </div>
 <script type="module">
 import { startHand } from '../src/hand.js';
 import { createChargeTracker } from '../src/input-core.js';
+import { classifyHand, fingerBends } from '../src/hand-classify.js';
 
 const $ = (id) => document.getElementById(id);
 const cells = {};
@@ -45,6 +51,13 @@ function onFrame(st, hands) {
   const aim = tracker.state(now());
   for (const [k, el] of Object.entries(cells)) el.className = aim && k === aim.side + aim.level ? 'aim' : k === st.side + st.level ? 'now' : '';
   $('info').innerHTML = `손 ${st.hands}개<br>gesture: ${st.gesture}<br>side: ${st.side ?? '-'} · level: ${st.level ?? '-'}<br>heldSec: ${aim ? aim.heldSec.toFixed(2) : '-'}`;
+  // per hand: raw classification (no hysteresis), MediaPipe label + score, finger bends in degrees
+  $('hands').innerHTML = hands.map((h) => {
+    const c = classifyHand(h.landmarks, h.handedness, { world: h.world });
+    const b = fingerBends(h.world ?? h.landmarks).map((d) => d.toFixed(0).padStart(3, ' '));
+    return `${c.gesture} · ${c.side} · ${c.level} · label ${h.handedness?.categoryName ?? '-'} ${h.handedness?.score?.toFixed(2) ?? ''}`
+      + `<br>bend 검지 ${b[0]} 중지 ${b[1]} 약지 ${b[2]} 새끼 ${b[3]}`;
+  }).join('<hr>');
 }
 const onShot = (a) => { $('last').textContent = a.type === 'press' ? `press ${a.side} ${a.level}` : `release ${a.heldSec?.toFixed(2) ?? '-'}s`; };
 
