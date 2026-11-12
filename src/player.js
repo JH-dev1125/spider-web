@@ -1,7 +1,5 @@
 import { CFG } from './config.js';
 
-const RAD = Math.PI / 180;
-
 export const createPlayer = () => ({
   pos: { x: 0, y: CFG.startHeight, z: 0 },
   vel: { x: 0, y: 0, z: CFG.baseSpeed },
@@ -9,7 +7,6 @@ export const createPlayer = () => ({
   ropeLen: 0,
   swingPhase: 'none',
   sawDescent: false,
-  swingSec: 0,
   alive: true,
 });
 
@@ -23,7 +20,6 @@ export function attach(p, point) {
   p.ropeLen = len * CFG.reelFactor;
   p.swingPhase = 'descending';
   p.sawDescent = false;
-  p.swingSec = 0;
   return true;
 }
 
@@ -32,8 +28,20 @@ export function detach(p) {
   p.swingPhase = 'none';
 }
 
-// Rope constraint, phase tracking and auto-release. Pushes 'bottom' and 'released' into events.
-function swing(p, dt, events) {
+// Player let go of the key: detach, plus the boost once the swing has passed its bottom
+// (tapping press/release must not pump height). Returns true if a rope was attached.
+export function release(p) {
+  if (!p.anchor) return false;
+  if (p.swingPhase === 'ascending') {
+    p.vel.y += CFG.releaseBoostUp;
+    p.vel.z += CFG.releaseBoostForward;
+  }
+  detach(p);
+  return true;
+}
+
+// Rope constraint and phase tracking. Pushes 'bottom'. The rope holds until release() (player input).
+function swing(p, events) {
   const { pos, vel, anchor: a } = p;
   const d = { x: pos.x - a.x, y: pos.y - a.y, z: pos.z - a.z };
   const len = Math.hypot(d.x, d.y, d.z);
@@ -45,21 +53,11 @@ function swing(p, dt, events) {
     const vn = vel.x * n.x + vel.y * n.y + vel.z * n.z;
     if (vn > 0) { vel.x -= vn * n.x; vel.y -= vn * n.y; vel.z -= vn * n.z; }
   }
-  p.swingSec += dt;
   if (vel.y <= 0) p.sawDescent = true;
   // ascending only after passing the lowest point (spec 5.3)
   if (p.swingPhase === 'descending' && p.sawDescent && vel.y > 0) {
     p.swingPhase = 'ascending';
     events.push('bottom');
-  }
-  // rope angle from vertical, positive when the anchor is behind the player (z)
-  const backDeg = Math.atan2(pos.z - a.z, a.y - pos.y) / RAD;
-  const done = p.swingPhase === 'ascending' && (vel.y <= 0 || backDeg > CFG.autoReleaseBackAngleDeg);
-  if (done || p.swingSec >= CFG.maxSwingSec) {
-    vel.y += CFG.releaseBoostUp;
-    vel.z += CFG.releaseBoostForward;
-    detach(p);
-    events.push('released');
   }
 }
 
@@ -99,8 +97,9 @@ export function stepPlayer(p, dt, buildings, minForwardSpeed) {
     pos.y = CFG.ceiling;
     vel.y = Math.min(vel.y, 0);
   }
-  if (p.anchor) swing(p, dt, events);
-  vel.z = Math.max(vel.z, minForwardSpeed);
+  if (p.anchor) swing(p, events);
+  // floor only in free flight: on a held rope it would pump energy forever and orbit the anchor
+  else vel.z = Math.max(vel.z, minForwardSpeed);
   if (pos.y <= 0) {
     p.alive = false;
     events.push('dead');

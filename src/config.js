@@ -30,23 +30,23 @@ export const CFG = deepFreeze({
   aimPitchDeg: { hi: 30, mid: 0, lo: -35 }, // Task 7: hi was 35 and overshot rooftops
   chargeMin: 12,
   chargeMax: 70,
-  chargeFullSec: 1.0,
-  reelFactor: 0.85,
+  chargeFullSec: 1.0, // chargeMin/Max/FullSec: legacy charge preview (render.js chargeLength), unused by play
+  webRange: 70, // every web flies this far at once
+  reelFactor: 0.8, // was 0.85; 0.85 let the hold-release bot survive only 20/40 tuning seeds, 0.8 gives 40/40
   minRopeLen: 3,
-  maxSwingSec: 4,
-  releaseBoostUp: 6,
+  releaseBoostUp: 9, // was 6; adds margin when the release is a bit early or late (see controls-report)
   releaseBoostForward: 4,
   wallBounceLoss: 0.5,
   wallSkin: 0.05,
   bounceMinSpeed: 2,
   wallPushOff: 10, // m/s inward when free flight touches a face slower than bounceMinSpeed
-  autoReleaseBackAngleDeg: 35,
   missShowSec: 0.25,
   // game flow
   trickSec: 0.6,
   overFallSec: 1, // death fall animation before the result screen
   overInputDelaySec: 0.3, // ignore Space/Enter right after dying so a held key can't skip the result
-  botChargeSec: 0.6, // ?autoplay and the headless bot test
+  botWaitSec: 0.3, // ?autoplay and the headless bot test: free flight before the next press
+  botHoldAfterBottomSec: 0.2, // hold this long past the swing bottom, then let go
   // camera
   camNear: 0.5,
   camBack: 8.5,

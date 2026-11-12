@@ -43,21 +43,34 @@ test('cancel and no-aim cases', () => {
   assert.equal(tr.release(null, null, 1), null);
 });
 
-test('attachKeyboard: maps keys, ignores repeat/unknown, blur cancels, detach', () => {
+test('attachKeyboard: press fires at once, keyup of the active key releases, blur releases', () => {
   const target = new EventTarget();
   const tr = createChargeTracker();
+  const acts = [];
   let t = 0;
-  const off = attachKeyboard(target, tr, () => t);
+  const off = attachKeyboard(target, tr, () => t, (a) => acts.push(a));
   const fire = (type, code, repeat = false) => {
     const e = new Event(type); e.code = code; e.repeat = repeat; target.dispatchEvent(e);
   };
-  fire('keydown', 'KeyE'); t = 0.5;
-  fire('keydown', 'KeyE', true); // repeat must not restart
+  fire('keydown', 'KeyE');
+  assert.deepEqual(acts, [{ type: 'press', side: 'R', level: 'hi' }]); // same event, no charge wait
+  t = 0.5;
+  fire('keydown', 'KeyE', true); // repeat must not re-fire
   near(tr.state(t).heldSec, 0.5);
   fire('keydown', 'KeyX'); assert.equal(tr.state(t).side, 'R');
+  assert.equal(acts.length, 1);
   fire('keyup', 'KeyQ'); assert.ok(tr.state(t)); // other key's keyup ignored
+  assert.equal(acts.length, 1);
   fire('keyup', 'KeyE'); assert.equal(tr.state(t), null);
+  assert.deepEqual(acts[1], { type: 'release', side: 'R', level: 'hi', heldSec: 0.5 });
+  // last pressed wins: the superseded key's keyup does nothing
+  fire('keydown', 'KeyQ'); fire('keydown', 'KeyD'); fire('keyup', 'KeyQ');
+  assert.deepEqual(acts.slice(2).map((a) => a.type), ['press', 'press']);
+  fire('keyup', 'KeyD'); assert.equal(acts.at(-1).type, 'release');
   fire('keydown', 'KeyZ'); target.dispatchEvent(new Event('blur'));
   assert.equal(tr.state(t), null);
+  assert.deepEqual(acts.at(-1), { type: 'release' });
+  const n = acts.length;
   off(); fire('keydown', 'KeyQ'); assert.equal(tr.state(t), null);
+  assert.equal(acts.length, n);
 });

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG } from '../src/config.js';
 import { aimVector, castWeb } from '../src/web.js';
-import { createPlayer, attach, detach, stepPlayer } from '../src/player.js';
+import { createPlayer, attach, detach, release, stepPlayer } from '../src/player.js';
 
 const DT = 1 / 60;
 const W = CFG.corridorHalfWidth;
@@ -12,7 +12,7 @@ const towers = [
   { side: 'R', z0: 5, z1: 200, h: 90 },
   { side: 'L', z0: 5, z1: 200, h: 90 },
 ];
-const webFrom = (p, side, level) => castWeb(p.pos, aimVector(side, level), CFG.chargeMax, towers);
+const webFrom = (p, side, level) => castWeb(p.pos, aimVector(side, level), CFG.webRange, towers);
 
 test('createPlayer start state; attach reels rope in; detach', () => {
   const p = createPlayer();
@@ -53,32 +53,53 @@ test('(b) dt is clamped to maxDt', () => {
   assert.ok(p.pos.z <= V * CFG.maxDt + 1e-9);
 });
 
-test('(c) right-high-forward anchor: rope holds, then auto-release', () => {
+test('(c) right-high-forward anchor: a held rope holds 5+ s with no auto-release', () => {
   const p = createPlayer();
   const a = webFrom(p, 'R', 'hi');
   assert.ok(a && a.y > p.pos.y && a.z > p.pos.z && a.x > 0);
   attach(p, a);
-  let released = false;
-  for (let t = 0; t < 3; t += DT) {
+  for (let t = 0; t < 6; t += DT) {
     const ev = stepPlayer(p, DT, towers, V);
-    if (p.anchor) assert.ok(dist(p.pos, p.anchor) <= p.ropeLen + 1e-6);
-    if (ev.includes('released')) released = true;
-    if (released) assert.equal(p.anchor, null);
+    assert.ok(!ev.includes('released'));
+    assert.deepEqual(p.anchor, a);
+    assert.ok(dist(p.pos, p.anchor) <= p.ropeLen + 1e-6);
   }
-  assert.ok(released);
   assert.ok(p.alive);
+});
+
+test('release(): boost + detach, true only when attached', () => {
+  const p = createPlayer();
+  assert.equal(release(p), false); // nothing held: no boost
+  assert.deepEqual(p.vel, { x: 0, y: 0, z: V });
+  attach(p, webFrom(p, 'R', 'hi'));
+  for (let i = 0; i < 600 && p.swingPhase !== 'ascending'; i++) stepPlayer(p, DT, towers, V);
+  const v = { ...p.vel };
+  assert.equal(release(p), true);
+  assert.equal(p.anchor, null);
+  assert.equal(p.swingPhase, 'none');
+  assert.ok(Math.abs(p.vel.y - (v.y + CFG.releaseBoostUp)) < 1e-9);
+  assert.ok(Math.abs(p.vel.z - (v.z + CFG.releaseBoostForward)) < 1e-9);
+});
+
+test('held too long the rope swings you back (pendulum, no forward floor)', () => {
+  const p = createPlayer();
+  attach(p, webFrom(p, 'R', 'hi'));
+  let back = false;
+  for (let t = 0; t < 6 && !back; t += DT) { stepPlayer(p, DT, towers, V + 20); back = p.vel.z < 0; }
+  assert.ok(back, 'vel.z never went negative on a held rope');
 });
 
 test('(d) loop A: a swing ends higher than falling for the same time', () => {
   const p = createPlayer();
   const free = createPlayer();
   attach(p, webFrom(p, 'R', 'hi'));
-  let ev = [];
-  for (let i = 0; i < 600 && !ev.includes('released'); i++) {
-    ev = stepPlayer(p, DT, towers, V);
+  let after = 0; // release 0.2 s past the bottom
+  for (let i = 0; i < 600 && after < 0.2; i++) {
+    stepPlayer(p, DT, towers, V);
     stepPlayer(free, DT, towers, V);
+    if (p.swingPhase === 'ascending') after += DT;
   }
-  assert.ok(ev.includes('released'));
+  assert.equal(release(p), true);
   assert.ok(p.pos.y > free.pos.y, `swing y ${p.pos.y} vs free ${free.pos.y}`);
   // and the launch carries it above the start height (peak of the release arc)
   const peak = p.pos.y + Math.max(p.vel.y, 0) ** 2 / (2 * CFG.gravity);
@@ -115,38 +136,31 @@ test('rope dragging into the face: no jitter, not stuck, alive', () => {
     attach(p, { x: W, y: 100, z: 25 });
     let bounces = 0;
     let contact = 0;
-    let released = false;
-    for (let t = 0; t < 6 && !released; t += DT) {
+    for (let t = 0; t < 6; t += DT) {
       const ev = stepPlayer(p, DT, face, V);
       if (ev.includes('bounce')) bounces++;
-      released = ev.includes('released');
       if (p.pos.x >= W - CFG.wallSkin - 1e-9) contact++;
       assert.ok(Math.abs(p.pos.x) < W, `x ${p.pos.x}`);
       if (p.anchor) assert.ok(dist(p.pos, p.anchor) <= p.ropeLen + 1e-6);
     }
     assert.ok(contact > 0, `vx ${vx}: never reached the face`);
-    assert.ok(released, `vx ${vx}: never released`);
+    assert.ok(p.anchor, `vx ${vx}: rope let go by itself`);
     assert.ok(bounces <= (vx < 1 && x0 > W - 1 ? 0 : 2), `vx ${vx}: bounces ${bounces}`);
     assert.ok(p.alive);
   }
 });
 
-test('regression: L lo anchor releases within 3 s', () => {
-  const p = createPlayer();
-  attach(p, webFrom(p, 'L', 'lo'));
-  let released = false;
-  for (let t = 0; t < 3 && !released; t += DT) released = stepPlayer(p, DT, towers, V).includes('released');
-  assert.ok(released);
-});
-
-test('(f) vel.z never below minForwardSpeed', () => {
+test('(f) free flight: vel.z never below minForwardSpeed; on a rope the floor is off', () => {
   const min = V + 8;
   const p = createPlayer();
-  attach(p, webFrom(p, 'R', 'hi'));
-  for (let t = 0; t < 3; t += DT) {
+  for (let t = 0; t < 1; t += DT) {
     stepPlayer(p, DT, towers, min);
     assert.ok(p.vel.z >= min);
   }
+  attach(p, webFrom(p, 'R', 'hi'));
+  let below = false;
+  for (let t = 0; t < 3; t += DT) { stepPlayer(p, DT, towers, min); below ||= p.vel.z < min; }
+  assert.ok(below, 'floor applied on the rope');
 });
 
 test('(g) ceiling caps height', () => {
@@ -160,7 +174,7 @@ test('(g) ceiling caps height', () => {
 
 test('anchor closer than minRopeLen is refused; free flight pushes off the face; web spam cannot hover', () => {
   const face = [{ side: 'R', z0: -50, z1: 4000, h: 110 }];
-  const cast = (level) => castWeb(p.pos, aimVector('R', level), CFG.chargeMax, face);
+  const cast = (level) => castWeb(p.pos, aimVector('R', level), CFG.webRange, face);
   const p = createPlayer();
   p.pos.x = W - CFG.wallSkin;
   assert.ok(cast('mid'));
@@ -170,6 +184,7 @@ test('anchor closer than minRopeLen is refused; free flight pushes off the face;
   assert.equal(p.vel.x, -CFG.wallPushOff); // not glued to the face
   let dead = false;
   for (let t = 0; t < 20 && !dead; t += DT) {
+    release(p); // tap: press and let go every frame
     for (const level of ['hi', 'mid', 'lo']) {
       const a = !p.anchor && cast(level);
       if (a) attach(p, a);
@@ -179,12 +194,22 @@ test('anchor closer than minRopeLen is refused; free flight pushes off the face;
   assert.ok(dead, 'spamming short webs on one face must not keep the player up');
 });
 
-test('swing emits one bottom event, before release', () => {
+test('release before the swing bottom detaches without the boost (tapping cannot pump height)', () => {
+  const p = createPlayer();
+  attach(p, webFrom(p, 'R', 'hi'));
+  stepPlayer(p, DT, towers, V);
+  const v = { ...p.vel };
+  assert.equal(release(p), true);
+  assert.equal(p.anchor, null);
+  assert.deepEqual(p.vel, v);
+});
+
+test('swing emits one bottom event, and stepPlayer never emits released', () => {
   const p = createPlayer();
   attach(p, webFrom(p, 'R', 'mid'));
   const evs = [];
-  for (let i = 0; i < 600 && !evs.includes('released'); i++) evs.push(...stepPlayer(p, DT, towers, V));
-  assert.deepEqual(evs.filter((e) => e === 'bottom' || e === 'released'), ['bottom', 'released']);
+  for (let i = 0; i < 600; i++) evs.push(...stepPlayer(p, DT, towers, V));
+  assert.deepEqual(evs.filter((e) => e === 'bottom' || e === 'released'), ['bottom']);
 });
 
 test('attach returns true for a normal anchor', () => {
@@ -192,31 +217,27 @@ test('attach returns true for a normal anchor', () => {
   assert.equal(attach(p, webFrom(p, 'R', 'hi')), true);
 });
 
-test('failsafe: rope released after maxSwingSec even if the swing never ascends', () => {
+test('dead hang: no bottom event, rope stays attached', () => {
   const p = createPlayer();
   p.vel.z = 0;
   attach(p, { x: 0, y: CFG.startHeight + 10, z: 0 }); // dead hang, no forward push
-  let tReleased = null;
-  for (let t = 0; t < CFG.maxSwingSec + 1 && tReleased === null; t += DT) {
+  for (let t = 0; t < 6; t += DT) {
     const ev = stepPlayer(p, DT, [], 0);
     assert.ok(!ev.includes('bottom'), 'no bottom while the swing never ascends');
-    if (ev.includes('released')) tReleased = t;
   }
-  assert.ok(tReleased !== null && tReleased <= CFG.maxSwingSec + DT, `released at ${tReleased}`);
+  assert.ok(p.anchor);
 });
 
-test('ascending only after the lowest point: rising attach does not release at the apex', () => {
+test('bottom only after the lowest point: a rising attach does not count its first apex', () => {
   const p = createPlayer();
   p.vel.y = 15;
   attach(p, webFrom(p, 'R', 'hi'));
   let sawNeg = false;
-  let released = false;
-  for (let t = 0; t < CFG.maxSwingSec && !released; t += DT) {
-    released = stepPlayer(p, DT, towers, V).includes('released');
-    if (!released && p.vel.y <= 0) sawNeg = true;
+  let bottom = false;
+  for (let t = 0; t < 4 && !bottom; t += DT) {
+    bottom = stepPlayer(p, DT, towers, V).includes('bottom');
+    if (!bottom && p.vel.y <= 0) sawNeg = true;
   }
-  assert.ok(released);
-  assert.ok(sawNeg, 'released before vy ever went negative');
-  // vy before the boost was > 0: released while rising again, not at the first apex
-  assert.ok(p.vel.y > CFG.releaseBoostUp, `vy at release ${p.vel.y}`);
+  assert.ok(bottom);
+  assert.ok(sawNeg, 'bottom before vy ever went negative');
 });

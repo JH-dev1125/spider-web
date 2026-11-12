@@ -41,11 +41,12 @@ function feed(ctrl, hands, n, t0) {
   return t;
 }
 
-test('controller: charge gesture press, hold, release fires the shot', () => {
+test('controller: entering the gesture presses at once, leaving it releases', () => {
   const tr = createChargeTracker();
-  const shots = [];
-  const ctrl = createHandController(tr, { mode: 'shoot', onRelease: (s) => shots.push(s) });
+  const shots = [], presses = [];
+  const ctrl = createHandController(tr, { mode: 'shoot', onShot: (s) => { if (s.type === 'release') shots.push(s); else presses.push(s); } });
   let t = feed(ctrl, [hand(0.8, 0.1, SHOOT)], 3, 0);
+  assert.deepEqual(presses, [{ type: 'press', side: 'R', level: 'hi' }]);
   assert.deepEqual({ ...tr.state(t), heldSec: 0 }, { side: 'R', level: 'hi', heldSec: 0 });
   t = feed(ctrl, [hand(0.8, 0.1, SHOOT)], 20, t);
   t = feed(ctrl, [hand(0.8, 0.1, OPEN)], 3, t);
@@ -55,43 +56,45 @@ test('controller: charge gesture press, hold, release fires the shot', () => {
   assert.equal(tr.state(t), null);
 });
 
-test('controller: moving during charge calls move; release uses last charge-pose position', () => {
+test('controller: moving while holding does not re-aim (the web is already attached)', () => {
   const tr = createChargeTracker();
-  const shots = [];
-  const ctrl = createHandController(tr, { onRelease: (s) => shots.push(s) });
+  const shots = [], presses = [];
+  const ctrl = createHandController(tr, { onShot: (s) => { if (s.type === 'release') shots.push(s); else presses.push(s); } });
   let t = feed(ctrl, [hand(0.55, 0.3, SHOOT)], 3, 0);
   assert.deepEqual([tr.state(t).side, tr.state(t).level], ['R', 'hi']);
   t = feed(ctrl, [hand(0.45, 0.4, SHOOT)], 2, t);
-  assert.deepEqual([tr.state(t).side, tr.state(t).level], ['L', 'mid']);
-  // while the release is being confirmed the wrist drifts down into 'lo'; that must not change the aim
+  assert.deepEqual([tr.state(t).side, tr.state(t).level], ['R', 'hi']);
+  assert.equal(presses.length, 1);
   for (const y of [0.5, 0.6, 0.7]) t = feed(ctrl, [hand(0.45, y, FIST)], 1, t);
-  assert.deepEqual([shots[0].side, shots[0].level], ['L', 'mid']);
+  assert.deepEqual([shots[0].type, shots[0].side, shots[0].level], ['release', 'R', 'hi']);
 });
 
-test('controller: hand lost longer than handLostMs cancels, short gap does not', () => {
+test('controller: hand lost longer than handLostMs releases, short gap does not', () => {
   const tr = createChargeTracker();
-  const shots = [];
-  const ctrl = createHandController(tr, { onRelease: (s) => shots.push(s) });
+  const shots = [], presses = [];
+  const ctrl = createHandController(tr, { onShot: (s) => { if (s.type === 'release') shots.push(s); else presses.push(s); } });
   let t = feed(ctrl, [hand(0.5, 0.5, SHOOT)], 3, 0);
   t = feed(ctrl, [], 6, t); // 0.2 s gap
   assert.ok(tr.state(t), 'still charging after a short gap');
   t = feed(ctrl, [hand(0.5, 0.5, SHOOT)], 1, t);
+  assert.equal(shots.length, 0);
   t = feed(ctrl, [], 12, t); // 0.4 s gap
   assert.equal(tr.state(t), null);
+  assert.deepEqual(shots, [{ type: 'release' }]); // the rope does not stay stuck
   feed(ctrl, [hand(0.5, 0.5, OPEN)], 3, t);
-  assert.equal(shots.length, 0);
+  assert.equal(shots.length, 1);
 });
 
 test('controller: two hands, the one that entered the charge most recently owns the aim', () => {
   const tr = createChargeTracker();
-  const shots = [];
-  const ctrl = createHandController(tr, { onRelease: (s) => shots.push(s) });
+  const shots = [], presses = [];
+  const ctrl = createHandController(tr, { onShot: (s) => { if (s.type === 'release') shots.push(s); else presses.push(s); } });
   const L = (ext) => hand(0.2, 0.5, ext), R = (ext) => hand(0.8, 0.9, ext);
   let t = feed(ctrl, [L(SHOOT), R(FIST)], 3, 0);
   assert.equal(tr.state(t).side, 'L');
   t = feed(ctrl, [R(SHOOT), L(SHOOT)], 3, t); // order swapped: matching is by position, not index
   assert.deepEqual([tr.state(t).side, tr.state(t).level], ['R', 'lo']);
-  t = feed(ctrl, [L(OPEN), R(SHOOT)], 3, t); // the superseded hand letting go fires nothing
+  t = feed(ctrl, [L(OPEN), R(SHOOT)], 3, t); // the superseded hand letting go does nothing
   assert.equal(shots.length, 0);
   feed(ctrl, [L(OPEN), R(OPEN)], 3, t);
   assert.equal(shots.length, 1);
@@ -100,8 +103,8 @@ test('controller: two hands, the one that entered the charge most recently owns 
 
 test('controller: fist mode charges on fist, open releases; status reports open palm', () => {
   const tr = createChargeTracker();
-  const shots = [];
-  const ctrl = createHandController(tr, { mode: 'fist', onRelease: (s) => shots.push(s) });
+  const shots = [], presses = [];
+  const ctrl = createHandController(tr, { mode: 'fist', onShot: (s) => { if (s.type === 'release') shots.push(s); else presses.push(s); } });
   let t = feed(ctrl, [hand(0.5, 0.5, SHOOT)], 3, 0);
   assert.equal(tr.state(t), null);
   t = feed(ctrl, [hand(0.5, 0.5, FIST)], 3, t);
@@ -117,8 +120,8 @@ test('controller: fist mode charges on fist, open releases; status reports open 
 
 test('controller: alternating none/open while letting go still releases after N raw non-charge frames', () => {
   const tr = createChargeTracker();
-  const shots = [];
-  const ctrl = createHandController(tr, { onRelease: (s) => shots.push(s) });
+  const shots = [], presses = [];
+  const ctrl = createHandController(tr, { onShot: (s) => { if (s.type === 'release') shots.push(s); else presses.push(s); } });
   let t = feed(ctrl, [hand(0.2, 0.1, SHOOT)], 3, 0);
   for (const ext of [NONE, OPEN]) t = feed(ctrl, [hand(0.2, 0.1, ext)], 1, t);
   assert.equal(shots.length, 0);
@@ -131,21 +134,21 @@ test('controller: alternating none/open while letting go still releases after N 
   assert.equal(shots.length, 2);
 });
 
-test('controller: a hand far away does not inherit the charge of one that just vanished', () => {
+test('controller: a hand far away does not inherit the hold of one that just vanished', () => {
   const tr = createChargeTracker();
-  const shots = [];
-  const ctrl = createHandController(tr, { onRelease: (s) => shots.push(s) });
+  const shots = [], presses = [];
+  const ctrl = createHandController(tr, { onShot: (s) => { if (s.type === 'release') shots.push(s); else presses.push(s); } });
   let t = feed(ctrl, [hand(0.2, 0.5, SHOOT)], 3, 0);
   t = feed(ctrl, [hand(0.8, 0.5, OPEN)], 3, t); // appears the same frame the charging hand is gone
   assert.equal(shots.length, 0);
-  t = feed(ctrl, [hand(0.8, 0.5, OPEN)], 10, t); // past handLostMs: the vanished hand's charge is cancelled
+  t = feed(ctrl, [hand(0.8, 0.5, OPEN)], 10, t); // past handLostMs: the vanished hand's rope is released
   assert.equal(tr.state(t), null);
-  assert.equal(shots.length, 0);
+  assert.deepEqual(shots, [{ type: 'release' }]);
   // a hand moving a normal amount between frames keeps its identity
   t = feed(ctrl, [hand(0.5, 0.5, SHOOT)], 3, t);
   t = feed(ctrl, [hand(0.55, 0.5, SHOOT)], 1, t);
   feed(ctrl, [hand(0.6, 0.5, OPEN)], 3, t);
-  assert.equal(shots.length, 1);
+  assert.equal(shots.length, 2);
 });
 
 import { handStatusText } from '../src/hand-classify.js';

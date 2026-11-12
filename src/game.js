@@ -1,8 +1,8 @@
 // Pure per-frame game update shared by main.js and the headless bot test. No window/document.
 import { CFG } from './config.js';
 import { makeRng, difficulty, createWorld, updateWorld } from './world.js';
-import { createPlayer, attach, stepPlayer } from './player.js';
-import { aimVector, chargeLength, castWeb } from './web.js';
+import { createPlayer, attach, release, stepPlayer } from './player.js';
+import { aimVector, castWeb } from './web.js';
 
 export const pickTrickPose = (rng) => {
   const t = CFG.character.tricks;
@@ -27,7 +27,7 @@ export function createGame(seed) {
 function fire(g, s) {
   const p = g.player;
   const dir = aimVector(s.side, s.level);
-  const len = chargeLength(s.heldSec);
+  const len = CFG.webRange;
   const o = { x: p.pos.x, y: p.pos.y + CFG.render.playerHand, z: p.pos.z }; // same origin as the aim preview
   const hit = castWeb(o, dir, len, g.world.buildings);
   if (hit && attach(p, hit)) { g.missLine = null; return; }
@@ -44,8 +44,9 @@ function fall(p, dt) {
   if (p.pos.y === 0) v.x = v.y = v.z = 0;
 }
 
-// shots: [{side, level, heldSec}]. Returns stepPlayer's events ('bottom', 'released', 'bounce', 'dead').
-export function stepGame(g, dt, shots) {
+// actions: [{type: 'press', side, level} | {type: 'release'}]. A press fires a web at once (fixed range);
+// a release lets go of the rope. Returns events ('bottom', 'released', 'bounce', 'dead').
+export function stepGame(g, dt, actions) {
   dt = Math.min(dt, CFG.maxDt);
   const p = g.player;
   let events = [];
@@ -54,8 +55,11 @@ export function stepGame(g, dt, shots) {
     g.elapsed += dt;
     const diff = difficulty(g.elapsed);
     updateWorld(g.world, p.pos.z, g.elapsed, g.rng);
-    for (const s of shots) fire(g, s);
-    events = stepPlayer(p, dt, g.world.buildings, diff.speed);
+    for (const a of actions) {
+      if (a.type === 'press') fire(g, a);
+      else if (a.type === 'release' && release(p)) events.push('released');
+    }
+    events.push(...stepPlayer(p, dt, g.world.buildings, diff.speed));
     if (events.includes('bottom')) g.shake = CFG.render.shakePeak;
     if (events.includes('bounce')) g.shake = Math.max(g.shake, CFG.render.bounceShake);
     if (events.includes('released')) { g.pose = pickTrickPose(g.rng); g.trickSec = CFG.trickSec; }
@@ -68,17 +72,25 @@ export function stepGame(g, dt, shots) {
   return events;
 }
 
-// Simple autopilot: while unattached, charge CFG.botChargeSec, release a 'hi' shot, alternate R/L.
+// Simple autopilot: while unattached, wait CFG.botWaitSec then press 'hi' (alternating R/L) and hold;
+// release CFG.botHoldAfterBottomSec after the swing bottom. A miss is let go and retried.
 export function createBot() {
   let side = 'R';
-  let held = 0;
+  let wait = 0, after = 0, held = false;
   return (g, dt) => {
-    if (g.player.anchor || !g.player.alive) { held = 0; return []; }
-    held += Math.min(dt, CFG.maxDt);
-    if (held < CFG.botChargeSec) return [];
-    held = 0;
-    const shot = { side, level: 'hi', heldSec: CFG.botChargeSec };
+    const p = g.player;
+    dt = Math.min(dt, CFG.maxDt);
+    if (!p.alive) return [];
+    if (held && p.anchor) {
+      if (p.swingPhase !== 'ascending' || (after += dt) < CFG.botHoldAfterBottomSec) return [];
+      held = false; wait = 0;
+      return [{ type: 'release' }];
+    }
+    if (held) { held = false; wait = 0; return [{ type: 'release' }]; } // missed: let go, retry
+    if ((wait += dt) < CFG.botWaitSec) return [];
+    held = true; after = 0;
+    const a = { type: 'press', side, level: 'hi' };
     side = side === 'R' ? 'L' : 'R';
-    return [shot];
+    return [a];
   };
 }

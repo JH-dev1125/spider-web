@@ -35,15 +35,17 @@ export function createGestureGate(frames) {
   };
 }
 
-// Drives the shared charge tracker from per-frame hand results. update(hands, t):
-// hands = [{landmarks (mirrored), handedness}], t in seconds. The charge gesture is opts.mode.
+// Drives the shared aim tracker from per-frame hand results. update(hands, t):
+// hands = [{landmarks (mirrored), handedness}], t in seconds. The hold gesture is opts.mode.
+// opts.onShot gets the keyboard's actions: {type:'press', side, level} when a hand enters the gesture
+// (fires at once), {type:'release', ...} when the aiming hand leaves it or is lost (lets go of the rope).
 // Hands are matched to the previous frame's by wrist distance (up to CFG.handMatchMaxDist; farther is
 // a new hand). With two hands, the one that entered the charge gesture most recently owns the aim
-// (like the keyboard's last-pressed key); the other's release fires nothing.
+// (like the keyboard's last-pressed key); the other's release does nothing.
 // Charging is judged on the RAW gesture: CFG.handStableFrames frames in a row of charge / not-charge
 // enter / leave it, so a flickering none/open while letting go cannot hold the release back.
 // update([], t) with no detection only ages hands out, so it can run on frames without a new image.
-export function createHandController(tracker, { mode = 'shoot', onRelease = () => {} } = {}) {
+export function createHandController(tracker, { mode = 'shoot', onShot = () => {} } = {}) {
   const N = CFG.handStableFrames;
   let slots = []; // {wrist, gate, stable, cur: classification, seen, charging, on, run}
   let active = null;
@@ -67,17 +69,17 @@ export function createHandController(tracker, { mode = 'shoot', onRelease = () =
       s.on = on;
       if (s.run >= N && on !== s.charging) {
         s.charging = on;
-        if (on) { tracker.press(c.side, c.level, t); active = s; }
+        if (on) { tracker.press(c.side, c.level, t); active = s; onShot({ type: 'press', side: c.side, level: c.level }); }
         else if (s === active) {
           active = null;
           const shot = tracker.release(null, null, t);
-          if (shot) onRelease(shot);
+          if (shot) onShot({ type: 'release', ...shot });
         }
-      } else if (s === active && on) tracker.move(c.side, c.level);
+      }
     });
     slots = slots.filter((s) => {
       if (t - s.seen <= CFG.handLostMs / 1000) return true; // ms -> s
-      if (s === active) { active = null; tracker.cancel(); }
+      if (s === active) { active = null; tracker.cancel(); onShot({ type: 'release' }); }
       return false;
     });
     const shown = active || slots[0];

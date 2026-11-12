@@ -37,12 +37,12 @@ const now = () => performance.now() / 1000;
 let mode = 'title'; // 'title' | 'play' | 'over'
 let g = createGame(Date.now());
 let cam = null;
-let shots = [];
+let actions = []; // input queue for stepGame: {type:'press'|'release', ...}
 let overSec = 0;
 let result = null;
 let bot = null;
 
-const onShot = (shot) => { if (mode === 'play') shots.push(shot); };
+const onShot = (a) => { if (mode === 'play') actions.push(a); };
 attachKeyboard(window, tracker, now, onShot);
 
 // Hand mode (H on the title). Keyboard stays live alongside it.
@@ -58,7 +58,7 @@ window.addEventListener('keydown', (e) => {
   const id = ++attempt;
   const timer = setTimeout(() => { if (attempt === id) { attempt++; hand = 'failed'; } }, CFG.handPromptTimeoutSec * 1000);
   const onError = (err) => { console.warn('hand tracking stopped:', err); hand = 'failed'; handStatus = null; camEl.hidden = true; };
-  startHand(camEl, tracker, now, { mode: 'shoot', onRelease: onShot, onFrame: (st) => { handStatus = st; }, onError })
+  startHand(camEl, tracker, now, { mode: 'shoot', onShot, onFrame: (st) => { handStatus = st; }, onError })
     .then((ctl) => {
       clearTimeout(timer);
       if (attempt !== id) { ctl.stop(); return; } // answered after the timeout: release the camera
@@ -70,8 +70,8 @@ window.addEventListener('keydown', (e) => {
 function start() {
   g = createGame(Date.now());
   cam = null;
-  shots = [];
-  tracker.cancel(); // a key held through death must not fire on the first frame
+  actions = [];
+  tracker.cancel(); // a key held through death must not release anything on the first frame
   bot = autoplay ? createBot() : null;
   mode = 'play';
 }
@@ -117,10 +117,10 @@ function drawHud() {
     lines([
       ['WEB RUNNER', H.titlePx, H.color, true],
       ['왼쪽 Q · A · Z   /   오른쪽 E · D · C   (위 · 가운데 · 아래)', H.textPx, H.color],
-      ['길게 누를수록 거미줄이 멀리 나갑니다', H.textPx, H.color],
+      ['누르면 즉시 거미줄 → 누르고 있는 동안 스윙 → 떼면 날아감', H.textPx, H.color],
       coarse ? ['PC(키보드/웹캠)에서 열어주세요', H.hudPx, H.accent, true] : ['Space: 키보드로 시작', H.hudPx, H.accent, true],
-      ['바닥에 닿으면 끝 · 스윙이 끝나면 줄이 끊겨요 — 다시 쏘세요', H.textPx, H.color],
-      hand === 'on' && ['발사: 검지·새끼만 펴고 유지 → 풀면 발사 (손 위치 = 방향)', H.textPx, H.color],
+      ['바닥에 닿으면 끝 · 너무 오래 잡고 있으면 뒤로 되돌아가요', H.textPx, H.color],
+      hand === 'on' && ['검지·새끼 펴면 발사, 유지하면 스윙, 풀면 날아감 (손 위치 = 방향)', H.textPx, H.color],
       {
         off: ['H: 손동작 켜기', H.textPx, H.color],
         loading: ['웹캠 준비 중…', H.textPx, H.dim],
@@ -158,9 +158,9 @@ function update(dt) {
   palmSec = palmOk && handStatus?.open ? palmSec + dt : 0;
   if (palmSec >= CFG.handRestartSec) { palmSec = 0; start(); }
   if (mode === 'title') return;
-  if (bot && g.elapsed < botSec) shots.push(...bot(g, dt));
-  const events = stepGame(g, dt, shots);
-  shots = [];
+  if (bot && g.elapsed < botSec) actions.push(...bot(g, dt));
+  const events = stepGame(g, dt, actions);
+  actions = [];
   if (mode === 'play' && events.includes('dead')) {
     mode = 'over';
     overSec = 0;
@@ -181,7 +181,7 @@ function frame() {
     player: g.player,
     buildings: g.world.buildings,
     cam,
-    aim: mode === 'play' ? tracker.state(t) : null,
+    aim: null, // no charge preview: a press fires at once
     missLine: g.missLine,
     pose: g.pose,
     t,

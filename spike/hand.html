@@ -46,17 +46,17 @@ function onFrame(st, hands) {
   for (const [k, el] of Object.entries(cells)) el.className = aim && k === aim.side + aim.level ? 'aim' : k === st.side + st.level ? 'now' : '';
   $('info').innerHTML = `손 ${st.hands}개<br>gesture: ${st.gesture}<br>side: ${st.side ?? '-'} · level: ${st.level ?? '-'}<br>heldSec: ${aim ? aim.heldSec.toFixed(2) : '-'}`;
 }
-const onRelease = (s) => { $('last').textContent = `${s.side} ${s.level} ${s.heldSec.toFixed(2)}s`; };
+const onShot = (a) => { $('last').textContent = a.type === 'press' ? `press ${a.side} ${a.level}` : `release ${a.heldSec?.toFixed(2) ?? '-'}s`; };
 
 const fail = (e) => {
   $('info').textContent = '웹캠을 쓸 수 없음';
   $('err').textContent = `${e.name || 'Error'}: ${e.message}`;
 };
-startHand($('cam'), tracker, now, { mode, onRelease, onFrame, onError: fail }).then((handle) => {
+startHand($('cam'), tracker, now, { mode, onShot, onFrame, onError: fail }).then((handle) => {
   $('mode').onclick = () => {
     mode = mode === 'shoot' ? 'fist' : 'shoot';
     handle.setMode(mode);
-    $('mode').textContent = mode === 'shoot' ? '모드: shoot (검지·새끼)' : '모드: fist (주먹=충전, 펴면 발사)';
+    $('mode').textContent = mode === 'shoot' ? '모드: shoot (검지·새끼)' : '모드: fist (주먹=발사·유지, 펴면 놓기)';
   };
 }).catch(fail);
 </script>
