@@ -1,22 +1,49 @@
 // Pure hand-gesture logic. No window/document: runs in Node tests.
 // Coordinates: normalised [0,1], y down, in MIRRORED screen space (what the user sees in the preview).
-// MediaPipe gives camera space, so pass its landmarks through mirror() first: raw x > 0.5 => side 'L'.
+// MediaPipe gives camera space, so pass its landmarks through mirror() first: raw x > 0.5 => screen half 'L'.
 import { CFG } from './config.js';
 
-const FINGERS = [[8, 6], [12, 10], [16, 14], [20, 18]]; // MediaPipe [tip, pip] for index, middle, ring, pinky
+const FINGERS = [[5, 6, 8], [9, 10, 12], [13, 14, 16], [17, 18, 20]]; // MediaPipe [mcp, pip, tip]: index, middle, ring, pinky
 const d2 = (a, b) => (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+const sub = (a, b) => [a.x - b.x, a.y - b.y, (a.z ?? 0) - (b.z ?? 0)];
 
 export const mirror = (lms) => lms.map((p) => ({ ...p, x: 1 - p.x }));
 
-// handedness is accepted but unused: MediaPipe mislabels it often, so side comes from screen position.
-export function classifyHand(lms, handedness) {
+// Bend of each finger in degrees: angle between MCP->PIP and PIP->TIP in 3D. 0 = straight,
+// ~130 = folded onto the palm. Unlike distance-from-wrist it does not care whether the palm or
+// the back faces the camera, how the hand is tilted, or how big it is. Pass world landmarks if you have them.
+export function fingerBends(lms) {
+  return FINGERS.map(([m, p, t]) => {
+    const u = sub(lms[p], lms[m]), v = sub(lms[t], lms[p]);
+    const n = Math.hypot(...u) * Math.hypot(...v);
+    return n ? Math.acos(Math.max(-1, Math.min(1, (u[0] * v[0] + u[1] * v[1] + u[2] * v[2]) / n))) * 180 / Math.PI : 0;
+  });
+}
+
+// Thumb is don't-care. 'open' needs all four fingers straight (< handStraightDeg); 'shoot' needs index and
+// pinky out (< handExtendDeg) and middle and ring merely bent (> handCurlDeg), so a lazy thwip still counts.
+// The two never overlap (middle/ring below 30 vs above 40). prev = last frame's gesture: its thresholds
+// loosen by handHystDeg so a hand near a border does not flicker.
+export function gestureFromBends([i, m, r, p], prev = 'none') {
+  const { handStraightDeg: S, handExtendDeg: E, handCurlDeg: C, handFistDeg: F, handHystDeg: H } = CFG;
+  const h = (g) => (prev === g ? H : 0);
+  if (i < E + h('shoot') && p < E + h('shoot') && m > C - h('shoot') && r > C - h('shoot')) return 'shoot';
+  if (Math.min(i, m, r, p) > F - h('fist')) return 'fist';
+  if (Math.max(i, m, r, p) < S + h('open')) return 'open';
+  return 'none';
+}
+
+// handedness: MediaPipe category {categoryName, score} (a bare string or null = unknown).
+// side follows the hand used: MediaPipe labels assume a mirrored selfie image but we feed it the raw camera,
+// so its 'Left' is the user's right hand -> 'R'. Below CFG.handSideMinScore the wrist's screen half decides.
+// opts.world: world landmarks for the bend angles (metric 3D, no aspect distortion); opts.prev: see gestureFromBends.
+export function classifyHand(lms, handedness, { world, prev } = {}) {
   const w = lms[0];
-  const [i, m, r, p] = FINGERS.map(([tip, pip]) => d2(lms[tip], w) > d2(lms[pip], w));
-  const gesture = i && p && !m && !r ? 'shoot'
-    : !i && !m && !r && !p ? 'fist'
-    : i && m && r && p ? 'open' : 'none';
+  const gesture = gestureFromBends(fingerBends(world ?? lms), prev);
+  const label = handedness?.score >= CFG.handSideMinScore ? handedness.categoryName : null;
+  const side = label === 'Left' ? 'R' : label === 'Right' ? 'L' : w.x < 0.5 ? 'L' : 'R';
   const [hi, mid] = CFG.handLevelCuts;
-  return { gesture, side: w.x < 0.5 ? 'L' : 'R', level: w.y < hi ? 'hi' : w.y < mid ? 'mid' : 'lo' };
+  return { gesture, side, level: w.y < hi ? 'hi' : w.y < mid ? 'mid' : 'lo' };
 }
 
 const GESTURE_KO = { shoot: '발사', fist: '주먹', open: '손바닥', none: '없음' };
@@ -36,45 +63,51 @@ export function createGestureGate(frames) {
 }
 
 // Drives the shared aim tracker from per-frame hand results. update(hands, t):
-// hands = [{landmarks (mirrored), handedness}], t in seconds. The hold gesture is opts.mode.
-// opts.onShot gets the keyboard's actions: {type:'press', side, level} when a hand enters the gesture
-// (fires at once), {type:'release', ...} when the aiming hand leaves it or is lost (lets go of the rope).
+// hands = [{landmarks (mirrored), world?, handedness?}], t in seconds. The hold gesture is opts.mode.
+// opts.onShot gets the keyboard's actions: {type:'press', side, level} when a hand enters the gesture,
+// {type:'release', ...} when the aiming hand leaves it or is lost (lets go of the rope).
 // Hands are matched to the previous frame's by wrist distance (up to CFG.handMatchMaxDist; farther is
 // a new hand). With two hands, the one that entered the charge gesture most recently owns the aim
 // (like the keyboard's last-pressed key); the other's release does nothing.
-// Charging is judged on the RAW gesture: CFG.handStableFrames frames in a row of charge / not-charge
-// enter / leave it, so a flickering none/open while letting go cannot hold the release back.
+// Charging is judged on the RAW gesture: CFG.handStableFrames charge frames in a row press,
+// CFG.handReleaseFrames non-charge frames in a row release, so a flickering none/open cannot hold the release back.
+// The status gesture is the mode exactly while charging, so the HUD never shows it without a press sent.
+// If someone else clears the tracker while a hand still charges (the game calls tracker.cancel() on start and
+// on death, and drops presses outside play), the press is sent again: a gesture held through the start fires.
 // update([], t) with no detection only ages hands out, so it can run on frames without a new image.
 export function createHandController(tracker, { mode = 'shoot', onShot = () => {} } = {}) {
-  const N = CFG.handStableFrames;
-  let slots = []; // {wrist, gate, stable, cur: classification, seen, charging, on, run}
+  let slots = []; // {wrist, gate, stable, cur: classification, prev, seen, charging, on, run}
   let active = null;
+  const press = (s, t) => {
+    tracker.press(s.cur.side, s.cur.level, t);
+    active = s;
+    onShot({ type: 'press', side: s.cur.side, level: s.cur.level });
+  };
   return { update(hands, t) {
-    const cls = hands.map((h) => ({ ...classifyHand(h.landmarks, h.handedness), wrist: h.landmarks[0] }));
     const pairs = [];
-    cls.forEach((c, i) => slots.forEach((s, j) => pairs.push([d2(c.wrist, s.wrist), i, j])));
+    hands.forEach((h, i) => slots.forEach((s, j) => pairs.push([d2(h.landmarks[0], s.wrist), i, j])));
     pairs.sort((a, b) => a[0] - b[0]);
     const match = new Map(), used = new Set();
     for (const [dd, i, j] of pairs) {
       if (dd > CFG.handMatchMaxDist ** 2) break;
       if (!match.has(i) && !used.has(j)) { match.set(i, slots[j]); used.add(j); }
     }
-    cls.forEach((c, i) => {
+    // MediaPipe sometimes labels both hands the same: then neither label is trusted (screen half decides)
+    const twin = hands.length === 2 && hands[0].handedness?.categoryName === hands[1].handedness?.categoryName;
+    hands.forEach((h, i) => {
       let s = match.get(i);
-      if (!s) slots.push(s = { gate: createGestureGate(N), charging: false, on: false, run: 0 });
+      if (!s) slots.push(s = { gate: createGestureGate(CFG.handStableFrames), charging: false, on: false, run: 0, prev: 'none' });
+      const c = classifyHand(h.landmarks, twin ? null : h.handedness, { world: h.world, prev: s.prev });
+      s.prev = c.gesture;
       s.stable = s.gate(c.gesture);
-      s.wrist = c.wrist; s.cur = c; s.seen = t;
+      s.wrist = h.landmarks[0]; s.cur = c; s.seen = t;
       const on = c.gesture === mode;
       s.run = on === s.on ? s.run + 1 : 1;
       s.on = on;
-      if (s.run >= N && on !== s.charging) {
+      if (on !== s.charging && s.run >= (on ? CFG.handStableFrames : CFG.handReleaseFrames)) {
         s.charging = on;
-        if (on) { tracker.press(c.side, c.level, t); active = s; onShot({ type: 'press', side: c.side, level: c.level }); }
-        else if (s === active) {
-          active = null;
-          const shot = tracker.release(null, null, t);
-          if (shot) onShot({ type: 'release', ...shot });
-        }
+        if (on) press(s, t);
+        else if (s === active) { active = null; onShot({ type: 'release', ...tracker.release(null, null, t) }); }
       }
     });
     slots = slots.filter((s) => {
@@ -82,10 +115,11 @@ export function createHandController(tracker, { mode = 'shoot', onShot = () => {
       if (s === active) { active = null; tracker.cancel(); onShot({ type: 'release' }); }
       return false;
     });
+    if (active && !tracker.state(t)) press(active, t); // tracker cleared under a held gesture: press again
     const shown = active || slots[0];
     return {
       hands: slots.length,
-      gesture: shown ? shown.stable : 'none',
+      gesture: !shown ? 'none' : shown.charging ? mode : shown.stable === mode ? 'none' : shown.stable,
       side: shown ? shown.cur.side : null,
       level: shown ? shown.cur.level : null,
       open: slots.some((s) => s.stable === 'open'),
