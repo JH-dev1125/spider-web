@@ -12,18 +12,19 @@ export const speedK = (vel) =>
 // Follow cam: behind and above the hero, looking a little ahead along the velocity. Exponential smoothing
 // with dt, so two half steps equal one full step. z leads by vel.z / rate so the steady-state distance stays
 // camBack at any speed; x/y lag a little on purpose (the swing reads as motion).
-export function followCamera(player, prev, dt) {
+export function followCamera(player, prev, dt, target = player.anchor, aspect = 16 / 9) {
   const { pos, vel } = player;
   const fov = R.fovMin + (R.fovMax - R.fovMin) * speedK(vel);
-  const wall = CFG.corridorHalfWidth - R.camWallGap; // never put the lens inside a facade
-  const x = Math.max(-wall, Math.min(wall, pos.x)), y = pos.y + R.camUp, z = pos.z - R.camBack;
+  // Bias toward the street, continuously following the hero beyond the corridor as well.
+  const x = pos.x - Math.sign(pos.x) * Math.min(Math.abs(pos.x) * R.camWallGap / CFG.corridorHalfWidth, R.camWallGap);
+  const y = pos.y + R.camUp, z = pos.z - R.camBack;
   const lx = pos.x + vel.x * R.lookAhead, ly = pos.y + R.lookUp + vel.y * R.lookAhead, lz = pos.z + vel.z * R.lookAhead;
   // no prev, or a restart teleported the hero: snap
-  if (!prev || Math.abs(prev.z - z) > R.camSnap) return { x, y, z, lx, ly, lz, fovDeg: fov };
+  const snap = !prev || Math.abs(prev.z - z) > R.camSnap;
   const a = 1 - Math.exp(-CFG.camFollow * dt);
   const b = 1 - Math.exp(-CFG.fovFollow * dt);
   const tz = z + vel.z / CFG.camFollow, tlz = lz + vel.z / CFG.camFollow;
-  return {
+  const c = snap ? { x, y, z, lx, ly, lz, fovDeg: fov } : {
     x: prev.x + (x - prev.x) * a,
     y: prev.y + (y - prev.y) * a,
     z: prev.z + (tz - prev.z) * a,
@@ -32,6 +33,43 @@ export function followCamera(player, prev, dt) {
     lz: prev.lz + (tlz - prev.lz) * a,
     fovDeg: prev.fovDeg + (fov - prev.fovDeg) * b,
   };
+  if (target) {
+    // A new web must fit immediately; easing only the widening can hide its landing.
+    c.z = Math.min(c.z, pos.z - R.camBack, target.z - R.camBack);
+    const unit = (p) => {
+      const x = p.x - c.x, y = p.y - c.y, z = p.z - c.z, d = Math.hypot(x, y, z);
+      return { x: x / d, y: y / d, z: z / d };
+    };
+    const h = unit(pos), a = unit(target);
+    const fx = h.x + a.x, fy = h.y + a.y, fz = h.z + a.z;
+    const len = Math.hypot(fx, fy, fz), flat = Math.hypot(fx, fz);
+    const f = { x: fx / len, y: fy / len, z: fz / len };
+    const r = { x: fz / flat, z: -fx / flat };
+    const u = { x: f.y * r.z, y: f.z * r.x - f.x * r.z, z: -f.y * r.x };
+    c.lx = c.x + f.x * 10; c.ly = c.y + f.y * 10; c.lz = c.z + f.z * 10;
+    let tangent = Math.tan(fov * Math.PI / 360);
+    for (const point of [pos, { ...pos, y: pos.y - 1.15 }, { ...pos, y: pos.y + 1.1 }, target]) {
+      const dx = point.x - c.x, dy = point.y - c.y, dz = point.z - c.z;
+      const depth = dx * f.x + dy * f.y + dz * f.z;
+      tangent = Math.max(tangent, 1.15 * Math.abs(dx * r.x + dz * r.z) / (depth * aspect),
+        1.15 * Math.abs(dx * u.x + dy * u.y + dz * u.z) / depth);
+    }
+    c.fovDeg = Math.max(c.fovDeg, 2 * Math.atan(tangent) * 180 / Math.PI);
+  }
+  return c;
+}
+
+// Physics anchors can land on any box face, including the underside of a skybridge.
+export function surfaceNormal(point, structures) {
+  let best = Infinity, normal = { x: 0, y: 1, z: 0 };
+  for (const s of structures) {
+    if (['x', 'y', 'z'].some(k => point[k] < s.min[k] - 0.1 || point[k] > s.max[k] + 0.1)) continue;
+    for (const axis of ['x', 'y', 'z']) for (const side of ['min', 'max']) {
+      const d = Math.abs(point[axis] - s[side][axis]);
+      if (d < best) { best = d; normal = { x: 0, y: 0, z: 0 }; normal[axis] = side === 'min' ? -1 : 1; }
+    }
+  }
+  return normal;
 }
 
 // Camera offset in metres (screen x, screen y) for view.shake at time t.

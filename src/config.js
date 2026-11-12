@@ -125,11 +125,10 @@ export const CFG = deepFreeze({
     texRows: 8,
     windowLit: 0.38,
     windowStyles: [[0.6, 0.55], [0.42, 0.92], [0.92, 0.86]], // [glass w, glass h] as a fraction of a cell
-    facadeTints: [[86, 96, 140], [112, 92, 128], [72, 104, 132], [120, 114, 142], [96, 84, 110]],
+    facadeTints: [[128, 112, 103], [143, 137, 128], [72, 104, 132], [150, 141, 129], [112, 106, 98]],
     skylineTints: [[60, 66, 104], [78, 70, 106], [52, 72, 100]],
     depthMin: 18,
     depthMax: 34,
-    corniceH: 0.8,
     tankChance: 0.55,
     antennaChance: 0.4,
     antennaH: 14,
@@ -148,9 +147,9 @@ export const CFG = deepFreeze({
     streetSpan: 700, // street lights and cars wrap over this many metres around the camera
     sunDir: [0.08, 0.1, 1], // world coords: low sun at the far end of the street
     // rope / web
-    ropeRadius: 0.012, // min; drawn radius = camera distance * ropeRadiusPerM (~constant px width)
-    ropeRadiusPerM: 0.0035,
-    ropeMaxRadius: 0.6,
+    ropeRadius: 0.018, // min; drawn radius = camera distance * ropeRadiusPerM (~constant px width)
+    ropeRadiusPerM: 0.0012,
+    ropeMaxRadius: 0.16,
     splatSize: 1.8,
     playerHand: 0.9, // game.js casts from here; the drawn rope leaves the rig's hand instead
     // speed feel
@@ -203,7 +202,7 @@ export const CFG = deepFreeze({
     lens: '#f4f6ff',
   },
   character: {
-    height: 1.8, // metres; the rig in character.js is built to this
+    height: 1.85, // metres; long-legged athletic rig, pelvis at player.pos
     blendRate: 12, // 1/s, pose-to-pose easing
     turnRate: 8, // 1/s, body orientation easing
     flailSpeed: 14,
@@ -215,7 +214,7 @@ export const CFG = deepFreeze({
     poses: {
       swing: { spine: [0.15, 0, 0], neck: [-0.25, 0, 0], shL: [0.35, 0, 0.55], elL: [-0.9, 0, 0], shR: [0, 0, 2.9], elR: [0, 0, 0], hipL: [0.55, 0, 0.12], knL: [1.0, 0, 0], hipR: [0.15, 0, 0.06], knR: [0.35, 0, 0] },
       glide: { spine: [-0.1, 0, 0], neck: [-0.7, 0, 0], shL: [-0.2, 0, 1.55], elL: [-0.25, 0, 0], shR: [-0.2, 0, 1.55], elR: [-0.25, 0, 0], hipL: [0.1, 0, 0.5], knL: [0.25, 0, 0], hipR: [0.1, 0, 0.5], knR: [0.25, 0, 0] },
-      roll: { spine: [-0.45, 0, 0], neck: [-0.3, 0, 0], shL: [-1.1, 0, 0.35], elL: [-1.9, 0, 0], shR: [-1.1, 0, 0.35], elR: [-1.9, 0, 0], hipL: [-2.1, 0, 0.18], knL: [2.4, 0, 0], hipR: [-2.1, 0, 0.18], knR: [2.4, 0, 0] },
+      roll: { spine: [-0.2, 0, 0.25], neck: [-0.3, 0, 0], shL: [-0.4, 0, 1.25], elL: [-0.7, 0, 0], shR: [-0.8, 0, 0.8], elR: [-1.2, 0, 0], hipL: [-0.7, 0, 0.3], knL: [1.1, 0, 0], hipR: [-0.1, 0, 0.15], knR: [0.35, 0, 0] },
       tuck: { spine: [-0.6, 0, 0], neck: [-0.4, 0, 0], shL: [-1.4, 0, 0.2], elL: [-1.6, 0, 0], shR: [-1.4, 0, 0.2], elR: [-1.6, 0, 0], hipL: [-2.3, 0, 0.1], knL: [2.5, 0, 0], hipR: [-2.3, 0, 0.1], knR: [2.5, 0, 0] },
       fall: { spine: [0.25, 0, 0], neck: [-0.5, 0, 0], shL: [0, 0, 2.5], elL: [-0.7, 0, 0], shR: [0.2, 0, 2.1], elR: [-0.5, 0, 0], hipL: [-0.5, 0, 0.35], knL: [1.1, 0, 0], hipR: [0.2, 0, 0.2], knR: [0.6, 0, 0], flail: 1 },
     },

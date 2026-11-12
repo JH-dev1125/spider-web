@@ -1,4 +1,4 @@
-// Procedural low-poly 3D hero. three.js is passed in (createHero(THREE)) so this module stays importable in
+// Procedural articulated hero. three.js is passed in (createHero(THREE)) so this module stays importable in
 // Node: the pose math below is tested there. Coordinates inside the rig are three.js ones (see render.js):
 // the rig's +y is head-up and its chest faces +z.
 import { CFG } from './config.js';
@@ -80,11 +80,11 @@ function spider(g, x, y, s) { // emblem: body + 8 bent legs
 }
 const redWeb = (g, w, h) => {
   g.fillStyle = C.suitRed; g.fillRect(0, 0, w, h);
-  g.strokeStyle = C.suitDark; g.lineWidth = 2;
-  webLines(g, w / 2, h / 2, w * 0.75, 10, 5);
+  g.strokeStyle = C.suitBlack; g.lineWidth = 1.2;
+  webLines(g, w / 2, h / 2, w * 0.75, 18, 12);
 };
 
-// CapsuleGeometry/SphereGeometry u = 0 faces +z (the chest), 0.5 faces -z (the back).
+// LatheGeometry u = 0 faces +z (the chest), 0.5 faces -z (the back).
 function torsoTex(g, w, h) {
   redWeb(g, w, h);
   g.fillStyle = K.blue; // blue side panels
@@ -93,11 +93,12 @@ function torsoTex(g, w, h) {
 }
 
 export function createHero(THREE) {
-  const red = new THREE.MeshLambertMaterial({ map: canvasTex(THREE, 128, 128, redWeb), emissive: 0x2a0408 });
-  const torsoMat = new THREE.MeshLambertMaterial({ map: canvasTex(THREE, 256, 256, torsoTex), emissive: 0x2a0408 });
-  const blue = new THREE.MeshLambertMaterial({ color: K.blue, emissive: 0x060a24 });
+  const red = new THREE.MeshPhongMaterial({ map: canvasTex(THREE, 512, 512, redWeb), shininess: 32, specular: 0x553344 });
+  const torsoMat = new THREE.MeshPhongMaterial({ map: canvasTex(THREE, 512, 512, torsoTex), shininess: 32, specular: 0x553344 });
+  const blue = new THREE.MeshPhongMaterial({ color: K.blue, shininess: 24, specular: 0x223355 });
   const black = new THREE.MeshBasicMaterial({ color: C.suitBlack });
-  const lens = new THREE.MeshBasicMaterial({ color: C.lens });
+  const lens = new THREE.MeshPhongMaterial({ color: C.lens, shininess: 100, specular: 0xffffff, side: THREE.DoubleSide });
+  black.side = THREE.DoubleSide;
 
   const root = new THREE.Group(); // position + eased orientation
   const body = new THREE.Group(); // trick flips
@@ -106,35 +107,70 @@ export function createHero(THREE) {
   const mesh = (parent, geo, mat, y, sx = 1, sy = 1, sz = 1) => {
     const m = new THREE.Mesh(geo, mat); m.position.y = y; m.scale.set(sx, sy, sz); parent.add(m); return m;
   };
-  const cap = (r, len) => new THREE.CapsuleGeometry(r, len, 3, 8);
-  const ball = new THREE.SphereGeometry(1, 12, 8);
+  const cap = (r, len, taper = 0) => {
+    const geo = new THREE.CapsuleGeometry(r, len, 4, 12), p = geo.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const k = 1 + taper * p.getY(i) / (len / 2 + r);
+      p.setX(i, p.getX(i) * k); p.setZ(i, p.getZ(i) * k);
+    }
+    geo.computeVertexNormals(); return geo;
+  };
+  const ball = new THREE.SphereGeometry(1, 20, 14);
 
-  // pelvis at the root = player.pos; ~1.85 m from boots to head top
-  mesh(body, ball, blue, -0.02, 0.17, 0.13, 0.13);
+  // Pelvis at player.pos; long legs and a narrow waist under a tapered rib cage.
+  mesh(body, ball, blue, -0.02, 0.145, 0.12, 0.105);
   const J = {};
-  J.spine = joint(body, 0, 0.05);
-  mesh(J.spine, cap(0.16, 0.26), torsoMat, 0.25, 1.25, 1, 0.78);
+  J.spine = joint(body, 0, 0.03);
+  const torso = new THREE.LatheGeometry([
+    [0.11, 0], [0.125, 0.08], [0.145, 0.22], [0.187, 0.37], [0.18, 0.44], [0.10, 0.51], [0.065, 0.54],
+  ].map(([r, y]) => new THREE.Vector2(r, y)), 24);
+  mesh(J.spine, torso, torsoMat, 0, 1, 1, 0.68);
   J.neck = joint(J.spine, 0, 0.55);
-  const head = mesh(J.neck, ball, red, 0.13, 0.115, 0.135, 0.12);
-  for (const sd of [-1, 1]) { // tear-shaped lenses with a black rim, angled like the mask's eyes
-    const rim = mesh(head, ball, black, 0.08, 0.42, 0.52, 0.25);
-    rim.position.set(sd * 0.4, 0.08, 0.86); rim.rotation.z = sd * 0.5;
-    const l = mesh(rim, ball, lens, 0, 0.82, 0.82, 0.8); l.position.z = 0.25;
+  mesh(J.neck, cap(0.059, 0.04), red, 0.01);
+  const head = mesh(J.neck, ball, red, 0.14, 0.102, 0.13, 0.106);
+  for (const sd of [-1, 1]) {
+    const shape = new THREE.Shape();
+    shape.moveTo(0.1, 0.19); shape.lineTo(0.78, 0.43);
+    shape.quadraticCurveTo(0.76, -0.25, 0.38, -0.25);
+    shape.quadraticCurveTo(0.17, -0.17, 0.1, 0.19);
+    const eyeGeo = (scale, offset) => {
+      // Subdivide before projecting: a flat lens chord otherwise disappears inside the mask.
+      let geo = new THREE.ShapeGeometry(shape, 8).toNonIndexed();
+      for (let pass = 0; pass < 2; pass++) {
+        const p = geo.attributes.position, vertices = [];
+        for (let i = 0; i < p.count; i += 3) {
+          const a = new THREE.Vector3().fromBufferAttribute(p, i), b = new THREE.Vector3().fromBufferAttribute(p, i + 1), c = new THREE.Vector3().fromBufferAttribute(p, i + 2);
+          const ab = a.clone().lerp(b, 0.5), bc = b.clone().lerp(c, 0.5), ca = c.clone().lerp(a, 0.5);
+          for (const v of [a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca]) vertices.push(v.x, v.y, v.z);
+        }
+        geo.dispose(); geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+      }
+      const p = geo.attributes.position;
+      for (let i = 0; i < p.count; i++) {
+        const x = 0.42 + (p.getX(i) - 0.42) * scale, y = 0.08 + (p.getY(i) - 0.08) * scale;
+        p.setXYZ(i, x, y, Math.sqrt(Math.max(0.05, 1 - x * x - y * y)) + offset);
+      }
+      geo.computeVertexNormals(); return geo;
+    };
+    mesh(head, eyeGeo(1, 0.018), black, 0, sd, 1, 1);
+    mesh(head, eyeGeo(0.8, 0.035), lens, 0, sd, 1, 1);
   }
   for (const sd of [-1, 1]) {
     const s = sd < 0 ? 'L' : 'R';
-    const sh = J['sh' + s] = joint(J.spine, sd * 0.22, 0.46);
-    mesh(sh, cap(0.058, 0.2), red, -0.14);
-    const el = J['el' + s] = joint(sh, 0, -0.29);
-    mesh(el, cap(0.05, 0.2), red, -0.13);
-    mesh(el, ball, red, -0.29, 0.06, 0.07, 0.05);
-    J['hand' + s] = joint(el, 0, -0.31);
-    const hip = J['hip' + s] = joint(body, sd * 0.1, -0.08);
-    mesh(hip, cap(0.08, 0.3), blue, -0.22);
-    const kn = J['kn' + s] = joint(hip, 0, -0.44);
-    mesh(kn, cap(0.066, 0.3), blue, -0.2);
-    const boot = mesh(kn, cap(0.07, 0.14), red, -0.36); // red boot over the shin end
-    boot.position.z = 0.02;
+    const sh = J['sh' + s] = joint(J.spine, sd * 0.20, 0.44);
+    mesh(sh, ball, red, 0, 0.056, 0.062, 0.055);
+    mesh(sh, cap(0.052, 0.22, 0.12), blue, -0.13);
+    const el = J['el' + s] = joint(sh, 0, -0.31);
+    mesh(el, cap(0.043, 0.23, 0.25), red, -0.145);
+    mesh(el, ball, red, -0.32, 0.045, 0.075, 0.035);
+    const thumb = mesh(el, cap(0.015, 0.04), red, -0.30); thumb.position.x = sd * 0.044; thumb.rotation.z = sd * 0.5;
+    J['hand' + s] = joint(el, 0, -0.37);
+    const hip = J['hip' + s] = joint(body, sd * 0.085, -0.07);
+    mesh(hip, cap(0.07, 0.34, 0.2), blue, -0.22, 1, 1, 0.9);
+    const kn = J['kn' + s] = joint(hip, 0, -0.46);
+    mesh(kn, cap(0.047, 0.33, 0.3), red, -0.215);
+    const boot = mesh(kn, ball, red, -0.43, 0.06, 0.055, 0.135);
+    boot.position.z = 0.065;
   }
 
   const cur = poseTarget('glide', 0, false);

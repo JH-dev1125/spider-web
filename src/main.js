@@ -177,10 +177,6 @@ function update(dt) {
   } else if (mode === 'over') overSec += dt;
 }
 
-// temporary: remove after the 3D renderer reads structures (the old renderer wants {side, z0, z1, h} towers)
-const towerBuildings = (list) => list.filter((s) => s.kind === 'tower')
-  .map((s) => ({ side: s.max.x <= 0 ? 'L' : 'R', z0: s.min.z, z1: s.max.z, h: s.max.y }));
-
 let last = now();
 function frame() {
   const t = now();
@@ -190,7 +186,6 @@ function frame() {
   renderer?.render({
     player: g.player,
     structures: g.world.structures,
-    buildings: towerBuildings(g.world.structures), // temporary: remove after the 3D renderer reads structures
     web: g.web,
     missLine: g.missLine,
     pose: q.get('debugPose') || g.pose, // ?debugPose=<name> pins a pose for screenshots

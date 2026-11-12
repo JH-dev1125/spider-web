@@ -6,13 +6,11 @@
 import * as THREE from 'three';
 import { CFG } from './config.js';
 import { hash01 } from './world.js';
-import { followCamera, shakeOffset, speedLineK, wrapZ } from './render-math.js';
+import { followCamera, shakeOffset, speedLineK, wrapZ, surfaceNormal } from './render-math.js';
 import { createHero } from './character.js';
 
 const R = CFG.render;
 const C = CFG.colors;
-const W = CFG.corridorHalfWidth;
-const MAX_BUILDINGS = 256;
 const set3 = (v, o) => v.set(o.x, o.y, -o.z);
 const srgb = ([r, g, b]) => new THREE.Color().setRGB(r / 255, g / 255, b / 255, THREE.SRGBColorSpace);
 
@@ -89,7 +87,12 @@ function facadeMaterial(sunDir) {
           vec2 uv = (abs(n.x) > 0.5 ? vec2(vW.z, vW.y) : vec2(vW.x, vW.y)) / cell + fract(vInfo.a) * vec2(17.0, 5.0);
           float style = floor(vInfo.a);
           vec4 t = style < 0.5 ? texture2D(map0, uv) : style < 1.5 ? texture2D(map1, uv) : texture2D(map2, uv);
-          vec3 glass = mix(tint * 0.18, litColor * (0.7 + 0.6 * fract(vInfo.a * 7.0)), t.g);
+          float brickRow = floor(vW.y / 0.24);
+          vec2 brick = vec2(fract((abs(n.x) > 0.5 ? vW.z : vW.x) / 0.55 + mod(brickRow, 2.0) * 0.5), fract(vW.y / 0.24));
+          float mortar = step(0.94, brick.x) + step(0.9, brick.y);
+          if (style < 0.5) tint = mix(tint * vec3(1.35, 0.78, 0.63), tint * 0.55, min(mortar, 1.0));
+          if (style > 0.5 && style < 1.5) tint *= 0.9 + 0.1 * step(0.04, fract(vW.y / 3.0));
+          vec3 glass = mix(tint * vec3(0.22, 0.36, 0.5) + vec3(0.035, 0.055, 0.085) * (0.5 + 0.5 * sin(vW.y * 0.035)), litColor * (0.7 + 0.6 * fract(vInfo.a * 7.0)), t.g);
           col = mix(tint * light, glass, t.r);
           col *= 0.75 + 0.25 * smoothstep(0.0, 40.0, vW.y); // darker toward the street
         }
@@ -158,7 +161,7 @@ export function createRenderer(canvas) {
   street.rotation.x = -Math.PI / 2;
   scene.add(street);
 
-  // ---- buildings: corridor (rebuilt when view.buildings changes) + skyline (wrapped every frame) ----
+  // ---- structures: id-keyed detail records, uploaded only when boxes enter or leave ----
   const box = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
   const facade = facadeMaterial(sunDir);
   const instanced = (geo, mat, n) => {
@@ -173,14 +176,39 @@ export function createRenderer(canvas) {
     m.geometry.setAttribute('aInfo', new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4));
     return m.geometry.attributes.aInfo;
   };
-  const corridor = instanced(box, facade, MAX_BUILDINGS);
-  const corridorInfo = withInfo(corridor, MAX_BUILDINGS);
   const skyline = instanced(box, facade, R.skylineCount);
   const skylineInfo = withInfo(skyline, R.skylineCount);
-  const cornice = instanced(box, new THREE.MeshLambertMaterial({ color: C.endFace }), MAX_BUILDINGS);
-  const tanks = instanced(new THREE.CylinderGeometry(1, 1, 1, 10).translate(0, 0.5, 0), new THREE.MeshLambertMaterial({ color: '#3a3048' }), MAX_BUILDINGS * 2);
-  const antennas = instanced(box, new THREE.MeshLambertMaterial({ color: '#2a2a36' }), MAX_BUILDINGS);
-  const redLights = instanced(new THREE.SphereGeometry(1, 6, 4), new THREE.MeshBasicMaterial({ color: '#ff4a4a' }), MAX_BUILDINGS);
+  const metal = new THREE.MeshLambertMaterial({ color: '#87909d' });
+  const steel = new THREE.MeshLambertMaterial({ color: '#43596a' });
+  const yellow = new THREE.MeshLambertMaterial({ color: '#e9ad29' });
+  const tankMat = new THREE.MeshLambertMaterial({ color: '#654c40' });
+  const tankGeo = new THREE.CylinderGeometry(1, 1, 1, 12).translate(0, 0.5, 0);
+  const coneGeo = new THREE.ConeGeometry(1, 1, 12).translate(0, 0.5, 0);
+  const records = new Map(), batches = new Map();
+  // Parts share one draw per material/geometry, including diagonals in the crane lattice.
+  const partMatrix = new THREE.Matrix4(), partQ = new THREE.Quaternion();
+  const partPos = new THREE.Vector3(), partScale = new THREE.Vector3(), partDir = new THREE.Vector3();
+  const partUp = new THREE.Vector3(0, 1, 0);
+  function upload(name, geo, mat, parts, isFacade = false) {
+    let m = batches.get(name);
+    if (!m || parts.length > m.instanceMatrix.count) {
+      if (m) { scene.remove(m); m.dispose(); if (isFacade) m.geometry.dispose(); }
+      m = instanced(geo, mat, Math.max(16, 2 ** Math.ceil(Math.log2(parts.length || 1))));
+      if (isFacade) withInfo(m, m.instanceMatrix.count);
+      batches.set(name, m);
+    }
+    m.count = parts.length;
+    parts.forEach((p, i) => {
+      if (p.end) {
+        partPos.set(p.x, p.y, p.z); partDir.copy(p.end).sub(partPos);
+        const len = partDir.length(); partQ.setFromUnitVectors(partUp, partDir.divideScalar(len));
+        m.setMatrixAt(i, partMatrix.compose(partPos, partQ, partScale.set(p.sx, len, p.sz)));
+      } else setST(m, i, p.x, p.y, p.z, p.sx, p.sy, p.sz);
+      if (isFacade) writeInfo(m.geometry.attributes.aInfo, i, p.color, p.style);
+    });
+    m.instanceMatrix.needsUpdate = true;
+    if (isFacade) m.geometry.attributes.aInfo.needsUpdate = true;
+  }
 
   const tints = R.facadeTints.map(srgb);
   const skyTints = R.skylineTints.map(srgb);
@@ -199,69 +227,185 @@ export function createRenderer(canvas) {
   skyline.count = R.skylineCount;
   skylineInfo.needsUpdate = true;
 
-  let sig = '';
-  function syncBuildings(list) {
-    const s = list.length && `${list.length}|${list[0].z0}|${list[list.length - 1].z0}`;
-    if (s === sig) return;
-    sig = s;
-    let nt = 0, na = 0;
-    const n = Math.min(list.length, MAX_BUILDINGS);
-    for (let i = 0; i < n; i++) {
-      const b = list[i];
-      const key = Math.round(b.z0 * 16) * 2 + (b.side === 'L' ? 0 : 1); // stable per building: side + z0
-      const h = (k) => hash01(key * 13 + k);
-      const sd = b.side === 'L' ? -1 : 1;
-      const depth = R.depthMin + (R.depthMax - R.depthMin) * h(0);
-      const len = b.z1 - b.z0, cx = sd * (W + depth / 2), cz = -(b.z0 + b.z1) / 2;
-      setST(corridor, i, cx, 0, cz, depth, b.h, len);
-      writeInfo(corridorInfo, i, tints[Math.floor(h(1) * tints.length)], Math.floor(h(2) * 3) + h(3) * 0.99);
-      setST(cornice, i, cx, b.h, cz, depth + 0.6, R.corniceH, len + 0.6);
-      for (let k = 0; k < 2; k++) if (h(4 + k) < R.tankChance && nt < tanks.instanceMatrix.count) {
-        const r = 1.4 + h(6 + k);
-        setST(tanks, nt++, cx + (h(8 + k) - 0.5) * (depth - 6), b.h + R.corniceH, cz + (h(10 + k) - 0.5) * (len - 6), r, 3 + 2 * h(12 + k), r);
+  function describe(s, close) {
+    const { min: a, max: b, kind } = s;
+    const prefix = s.id.split(':')[0];
+    let seed = 0; for (const c of prefix) seed = (seed * 31 + c.charCodeAt(0)) | 0;
+    const h = k => hash01(Math.abs(seed) + k * 137);
+    const x = (a.x + b.x) / 2, z = -(a.z + b.z) / 2;
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    const parts = { solid: [], trim: [], steel: [], yellow: [], tank: [], roof: [] };
+    const add = (batch, x, y, z, sx, sy, sz) => {
+      const p = { x, y, z, sx, sy, sz }; parts[batch].push(p); return p;
+    };
+    const solid = () => Object.assign(add('solid', x, a.y, z, dx, dy, dz), {
+      color: tints[Math.floor(h(1) * tints.length)], style: Math.floor(h(2) * 3) + h(3) * 0.99,
+    });
+    const beam = (batch, ax, ay, az, bx, by, bz, width) => {
+      const p = add(batch, ax, ay, az, width, 1, width); p.end = new THREE.Vector3(bx, by, bz);
+    };
+    if (kind === 'frame') {
+      // Every physics beam is an I section; never fill the hollow lot with a facade.
+      if (dy > dx && dy > dz) {
+        for (const side of [-1, 1]) add('steel', x, a.y, z + side * (dz / 2 - 0.12), dx, dy, 0.24);
+        add('steel', x, a.y, z, 0.22, dy, dz);
+      } else if (dx > dz) {
+        for (const yy of [a.y, b.y - 0.2]) add('steel', x, yy, z, dx, 0.2, dz);
+        add('steel', x, a.y, z, dx, dy, 0.2);
+      } else {
+        for (const yy of [a.y, b.y - 0.2]) add('steel', x, yy, z, dx, 0.2, dz);
+        add('steel', x, a.y, z, 0.2, dy, dz);
       }
-      if (h(14) < R.antennaChance) {
-        const ax = cx + (h(15) - 0.5) * depth * 0.5, az = cz + (h(16) - 0.5) * len * 0.5, ah = R.antennaH * (0.6 + 0.8 * h(17));
-        setST(antennas, na, ax, b.h, az, 0.25, ah, 0.25);
-        setST(redLights, na++, ax, b.h + ah, az, 0.35, 0.35, 0.35);
+    } else if (kind === 'crane') {
+      const mast = dy > dx && dy > dz;
+      if (mast) {
+        for (const xx of [a.x + 0.14, b.x - 0.14]) for (const zz of [-a.z - 0.14, -b.z + 0.14]) add('yellow', xx, a.y, zz, 0.28, dy, 0.28);
+        for (let y = a.y; y < b.y; y += 4) {
+          const top = Math.min(y + 4, b.y);
+          for (const zz of [-a.z - 0.14, -b.z + 0.14]) beam('yellow', a.x + 0.14, y, zz, b.x - 0.14, top, zz, 0.13);
+          for (const xx of [a.x + 0.14, b.x - 0.14]) beam('yellow', xx, y, -a.z - 0.14, xx, top, -b.z + 0.14, 0.13);
+          add('yellow', x, y, z, dx, 0.14, dz);
+        }
+      } else {
+        for (const yy of [a.y, b.y - 0.18]) for (const zz of [-a.z - 0.1, -b.z + 0.1]) add('yellow', x, yy, zz, dx, 0.18, 0.18);
+        for (let xx = a.x; xx < b.x; xx += 3) {
+          for (const zz of [-a.z - 0.1, -b.z + 0.1]) beam('yellow', xx, a.y, zz, Math.min(xx + 3, b.x), b.y, zz, 0.12);
+        }
+        add('yellow', x, a.y + 0.2, z, 3, dy - 0.4, dz * 0.8); // solid operator cabin
+      }
+    } else if (kind === 'bridge') {
+      const p = solid(); p.style = 2.03; p.color = tints[2];
+      for (const yy of [a.y, b.y - 0.25]) add('steel', x, yy, z, dx, 0.25, dz + 0.15);
+      for (let xx = a.x + 1; xx < b.x; xx += 2.5) for (const zz of [-a.z, -b.z]) add('trim', xx, a.y, zz, 0.12, dy, 0.16);
+    } else if (kind === 'ledge') {
+      add('trim', x, a.y, z, dx, dy, dz);
+      add('steel', x, b.y - 0.12, z, dx + 0.12, 0.12, dz + 0.12);
+    } else {
+      solid();
+      const face = x < 0 ? b.x : a.x, sd = x < 0 ? 1 : -1;
+      // Thin cornices, masonry sills, and stacked balconies break up the wall silhouette.
+      for (const yy of [a.y, b.y - 0.45]) add('trim', x, yy, z, dx + 0.5, 0.45, dz + 0.5);
+      const style = Math.floor(h(2) * 3);
+      // Keep distant facades legible without spending triangles on every small sill.
+      for (let yy = a.y + 3; yy < b.y - 1; yy += close ? 3 : 6) {
+        if (style === 2) add('steel', face + sd * 0.07, yy, z, 0.14, 0.09, dz);
+        else for (let zz = a.z + 1.25; zz < b.z - 1; zz += close ? 2.5 : 5) {
+          add('trim', face + sd * 0.15, yy, -zz, 0.35, 0.12, 1.7);
+          if (style === 1 && Math.floor((zz - a.z) / 2.5) % 4 === 1 && yy % 9 < 3) {
+            add('trim', face + sd * 0.3, yy - 0.12, -zz, 0.7, 0.16, 2.1);
+            add('steel', face + sd * 0.65, yy, -zz, 0.08, 0.65, 2.1);
+          }
+        }
+      }
+      const exposed = !listHasUpper(s);
+      if (exposed) {
+        if (h(4) < R.tankChance) {
+          add('steel', x, b.y, z, 3.8, 0.25, 3.8);
+          for (const xx of [-1.3, 1.3]) for (const zz of [-1.3, 1.3]) add('steel', x + xx, b.y, z + zz, 0.18, 1.5, 0.18);
+          add('tank', x, b.y + 1.4, z, 1.8, 3.7, 1.8);
+          add('roof', x, b.y + 5.1, z, 2.0, 1, 2.0);
+          for (const yy of [b.y + 1.6, b.y + 4.6]) add('steel', x, yy, z, 3.7, 0.13, 3.7);
+        }
+        for (let i = 0; i < 3; i++) {
+          const ax = x + (h(8 + i) - 0.5) * (dx - 5), az = z + (h(12 + i) - 0.5) * (dz - 5);
+          add('trim', ax, b.y, az, 2.4, 1.3, 1.8);
+          for (let k = 0; k < 4; k++) add('steel', ax, b.y + 0.2 + k * 0.24, az + 0.91, 2.1, 0.07, 0.05);
+        }
+        if (h(14) < R.antennaChance) {
+          const ax = x + dx * 0.24, ah = R.antennaH * (0.6 + 0.8 * h(17));
+          add('steel', ax, b.y, z, 0.12, ah, 0.12);
+          for (let i = 0; i < 3; i++) add('steel', ax, b.y + ah - i * 1.4, z, 2.7 - i * 0.5, 0.08, 0.08);
+        }
       }
     }
-    corridor.count = cornice.count = n;
-    tanks.count = nt;
-    antennas.count = redLights.count = na;
-    for (const m of [corridor, cornice, tanks, antennas, redLights]) m.instanceMatrix.needsUpdate = true;
-    corridorInfo.needsUpdate = true;
+    return parts;
+  }
+  let upperIds = new Set();
+  const listHasUpper = s => s.kind === 'tower' && upperIds.has(s.id.split(':')[0]);
+  function syncStructures(list, heroZ) {
+    const ids = new Set(list.map(s => s.id));
+    let changed = false;
+    for (const id of records.keys()) if (!ids.has(id)) { records.delete(id); changed = true; }
+    upperIds = new Set(list.filter(s => s.kind === 'setback').map(s => s.id.split(':')[0]));
+    for (const s of list) {
+      const close = s.max.z > heroZ - 20 && s.min.z < heroZ + 100;
+      const signature = `${s.kind}|${s.min.x},${s.min.y},${s.min.z}|${s.max.x},${s.max.y},${s.max.z}|${s.attach}|${listHasUpper(s)}|${close}`;
+      if (records.get(s.id)?.signature === signature) continue;
+      records.set(s.id, { signature, parts: describe(s, close) }); changed = true;
+    }
+    if (!changed) return;
+    const all = { solid: [], trim: [], steel: [], yellow: [], tank: [], roof: [] };
+    for (const { parts } of records.values()) for (const key of Object.keys(all)) all[key].push(...parts[key]);
+    upload('solid', box, facade, all.solid, true);
+    upload('trim', box, metal, all.trim); upload('steel', box, steel, all.steel);
+    upload('yellow', box, yellow, all.yellow); upload('tank', tankGeo, tankMat, all.tank);
+    upload('roof', coneGeo, steel, all.roof);
   }
 
-  // ---- street lights + cars: one instanced batch of glowing boxes ----
+  // ---- street: shared low-poly traffic batches, both directions ----
   const lightsPerX = Math.ceil(R.streetSpan / R.streetLightSpacing);
   const carsPerLane = Math.ceil(R.streetSpan / R.carSpacing);
-  const nGlow = R.streetLightXs.length * lightsPerX + R.carLanes.length * carsPerLane;
+  const nCars = R.carLanes.length * carsPerLane;
+  const nLamps = R.streetLightXs.length * lightsPerX;
+  const nGlow = nLamps + nCars * 4;
   const glow = instanced(box, new THREE.MeshBasicMaterial(), nGlow);
-  glow.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(nGlow * 3), 3);
-  { // colours are fixed per slot
-    let i = 0;
-    const lamp = new THREE.Color(C.streetLight), head = new THREE.Color(C.carHead), tail = new THREE.Color(C.carTail);
-    for (let k = 0; k < R.streetLightXs.length * lightsPerX; k++) glow.setColorAt(i++, lamp);
-    for (const x of R.carLanes) for (let k = 0; k < carsPerLane; k++) glow.setColorAt(i++, x > 0 ? tail : head);
+  const cars = instanced(box, new THREE.MeshLambertMaterial(), nCars);
+  const cabinGeo = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+  const cp = cabinGeo.attributes.position;
+  for (let i = 0; i < cp.count; i++) if (cp.getY(i) > 0.5) {
+    cp.setX(i, cp.getX(i) * 0.82); cp.setZ(i, cp.getZ(i) * 0.74);
   }
+  cabinGeo.computeVertexNormals();
+  const cabins = instanced(cabinGeo, new THREE.MeshPhongMaterial({ color: '#253e50', shininess: 90 }), nCars);
+  const wheels = instanced(new THREE.CylinderGeometry(0.36, 0.36, 0.22, 8).rotateZ(Math.PI / 2),
+    new THREE.MeshLambertMaterial({ color: '#10131a' }), nCars * 4);
+  const signs = instanced(box, new THREE.MeshBasicMaterial({ color: '#ffda64' }), nCars);
+  const poles = instanced(box, steel, nLamps);
+  const markings = instanced(box, new THREE.MeshBasicMaterial({ color: '#aa966b' }), lightsPerX * 3);
+  const carTypes = Array.from({ length: nCars }, (_, i) => {
+    const h = hash01(i + 819);
+    const type = h < 0.12 ? 'bus' : h < 0.42 ? 'taxi' : 'sedan';
+    cars.setColorAt(i, new THREE.Color(type === 'taxi' ? '#f6bc27' : type === 'bus' ? '#c2c9c1' : ['#637c97', '#bb4445', '#b2bac0', '#334650'][i % 4]));
+    return type;
+  });
+  const lampColor = new THREE.Color(C.streetLight), headColor = new THREE.Color(C.carHead), tailColor = new THREE.Color(C.carTail);
+  for (let i = 0; i < nLamps; i++) glow.setColorAt(i, lampColor);
+  for (let i = nLamps; i < nGlow; i++) glow.setColorAt(i, (i - nLamps) % 4 < 2 ? headColor : tailColor);
   glow.count = nGlow;
   function syncStreet(camZ, t) {
-    let i = 0;
+    let i = 0, vehicle = 0, wheel = 0, sign = 0, mark = 0;
     const back = R.streetSpan * 0.3;
     for (const x of R.streetLightXs) for (let k = 0; k < lightsPerX; k++) {
       const z = wrapZ(k * R.streetLightSpacing, camZ, back, R.streetSpan);
+      setST(poles, i, x, 0, -z, 0.14, R.streetLightY, 0.14);
       setST(glow, i++, x, R.streetLightY, -z, 0.5, 0.25, 0.5);
     }
+    poles.count = i;
+    for (const x of [-5.5, 0, 5.5]) for (let k = 0; k < lightsPerX; k++) {
+      const z = wrapZ(k * R.streetLightSpacing, camZ, back, R.streetSpan);
+      setST(markings, mark++, x, 0.015, -z, x === 0 ? 0.18 : 0.10, 0.02, 5);
+    }
+    markings.count = mark;
     for (let li = 0; li < R.carLanes.length; li++) {
-      const x = R.carLanes[li], dir = x > 0 ? 1 : -1; // right lanes drive away (tail lights), left come at you
+      const x = R.carLanes[li], dir = x > 0 ? 1 : -1;
       for (let k = 0; k < carsPerLane; k++) {
         const gone = hash01(k * R.carLanes.length + li) < R.carGapChance;
         const z = wrapZ(k * R.carSpacing + dir * t * R.carSpeed, camZ, back, R.streetSpan);
-        setST(glow, i++, x, 0.7, -z, gone ? 0 : 1.7, gone ? 0 : 0.35, gone ? 0 : 0.5);
+        const type = carTypes[vehicle], bus = type === 'bus', len = bus ? 9 : 4.4, width = bus ? 2.3 : 1.85;
+        const scale = gone ? 0 : 1;
+        setST(cars, vehicle, x, 0.4, -z, width * scale, (bus ? 2.5 : 0.65) * scale, len * scale);
+        setST(cabins, vehicle++, x, bus ? 1.35 : 1.05, -z, (width - 0.15) * scale, (bus ? 1.2 : 0.65) * scale, (bus ? 8.2 : 2.35) * scale);
+        for (const sd of [-1, 1]) for (const end of [-1, 1]) {
+          setST(wheels, wheel++, x + sd * width / 2, 0.38, -z + end * len * 0.31, scale, scale, scale);
+        }
+        for (const end of [1, -1]) for (const sd of [-1, 1]) {
+          setST(glow, i++, x + sd * width * 0.34, 0.78, -z - end * dir * (len / 2 + 0.02), 0.28 * scale, 0.17 * scale, 0.08 * scale);
+        }
+        if (type === 'taxi' && !gone) setST(signs, sign++, x, 1.74, -z, 0.65, 0.22, 0.36);
       }
     }
-    glow.instanceMatrix.needsUpdate = true;
+    cars.count = cabins.count = nCars; wheels.count = wheel; signs.count = sign;
+    for (const m of [glow, cars, cabins, wheels, signs, poles, markings]) m.instanceMatrix.needsUpdate = true;
   }
 
   // ---- hero, rope, web flight, miss line, anchor splat ----
@@ -277,10 +421,15 @@ export function createRenderer(canvas) {
     scene.add(m);
     return m;
   };
-  const rope = strand(1), flight = strand(1), miss = strand(0.8);
+  const rope = strand(1), flight = strand(1), flightGlow = strand(0.17), miss = strand(0.8);
+  flightGlow.material.blending = THREE.AdditiveBlending; flightGlow.material.depthWrite = false;
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 6), new THREE.MeshBasicMaterial({ color: '#f1fbff' }));
+  const flash = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 6),
+    new THREE.MeshBasicMaterial({ color: '#c3e9ff', transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+  scene.add(tip, flash);
   const vA = new THREE.Vector3(), vB = new THREE.Vector3(), vDir = new THREE.Vector3(), UP = new THREE.Vector3(0, 1, 0);
   const vP = new THREE.Vector3(), vScale = new THREE.Vector3(), qSeg = new THREE.Quaternion(), mSeg = new THREE.Matrix4();
-  function segment(m, a, b) {
+  function segment(m, a, b, thickness = 1, taper = false) {
     vDir.subVectors(b, a);
     const len = vDir.length();
     m.visible = len > 1e-3;
@@ -290,7 +439,7 @@ export function createRenderer(canvas) {
     for (let i = 0; i < ROPE_SEG; i++) {
       vP.copy(a).addScaledVector(vDir, step * i);
       const d = vA.copy(vP).addScaledVector(vDir, step / 2).distanceTo(camera.position);
-      const r = Math.min(R.ropeMaxRadius, Math.max(R.ropeRadius, d * R.ropeRadiusPerM));
+      const r = Math.min(R.ropeMaxRadius, Math.max(R.ropeRadius, d * R.ropeRadiusPerM)) * thickness * (taper ? 1 - 0.65 * i / ROPE_SEG : 1);
       m.setMatrixAt(i, mSeg.compose(vP, qSeg, vScale.set(r, step, r)));
     }
     m.instanceMatrix.needsUpdate = true;
@@ -298,6 +447,8 @@ export function createRenderer(canvas) {
   const splat = new THREE.Mesh(new THREE.PlaneGeometry(R.splatSize, R.splatSize),
     new THREE.MeshBasicMaterial({ map: splatTexture(), transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }));
   scene.add(splat);
+  let anchorKey = '', flashAge = 1;
+  const normal = new THREE.Vector3(), FORWARD = new THREE.Vector3(0, 0, 1);
 
   // ---- speed lines: thin streaks in camera space, flying past ----
   const nLines = R.speedLineCount;
@@ -318,7 +469,7 @@ export function createRenderer(canvas) {
   function render(view, dt) {
     const p = view.player;
     const web = view.web ?? null;
-    cam = followCamera(p, cam, dt);
+    cam = followCamera(p, cam, dt, web?.to || p.anchor, camera.aspect);
     const [sx, sy] = shakeOffset(view.shake || 0, view.t);
     camera.position.set(cam.x, cam.y, -cam.z);
     camera.lookAt(cam.lx, cam.ly, -cam.lz);
@@ -327,7 +478,7 @@ export function createRenderer(canvas) {
     sky.position.copy(camera.position);
     street.position.set(camera.position.x, 0, camera.position.z);
 
-    syncBuildings(view.buildings);
+    syncStructures(view.structures, p.pos.z);
     for (let i = 0; i < SKY.length; i++) {
       const s = SKY[i];
       setST(skyline, i, s.x, 0, -wrapZ(s.z, cam.z, R.skylineBack, R.skylineSpan), s.w, s.h, s.d);
@@ -342,19 +493,32 @@ export function createRenderer(canvas) {
     hero.update(view.pose, view.t, dt, vPos, vVel, anchor, aimAt, vHand);
 
     rope.visible = splat.visible = !!anchor;
+    const key = p.anchor ? `${p.anchor.x},${p.anchor.y},${p.anchor.z}` : '';
+    if (key !== anchorKey) {
+      anchorKey = key;
+      if (anchor) {
+        set3(normal, surfaceNormal(p.anchor, view.structures));
+        splat.quaternion.setFromUnitVectors(FORWARD, normal);
+        flash.position.copy(anchor).addScaledVector(normal, 0.1);
+        flashAge = 0;
+      }
+    }
     if (anchor) {
       segment(rope, vHand, anchor);
-      splat.position.copy(anchor);
-      const onWall = Math.abs(Math.abs(p.anchor.x) - W) < 0.5; // inner face, else a roof
-      if (onWall) splat.lookAt(0, anchor.y, anchor.z); else splat.lookAt(anchor.x, anchor.y + 1, anchor.z);
-      splat.translateZ(0.05);
+      splat.position.copy(anchor).addScaledVector(normal, 0.035);
     }
-    flight.visible = !!web;
+    flashAge += dt;
+    flash.visible = flashAge < 0.22;
+    flash.material.opacity = Math.max(0, 1 - flashAge / 0.22);
+    flash.scale.setScalar(0.2 + flashAge * 3.5);
+    flight.visible = flightGlow.visible = tip.visible = !!web;
     if (web) {
       set3(vB, web.to);
       const d = vDir.subVectors(vB, vHand).length();
       vB.copy(vHand).addScaledVector(vDir.divideScalar(d || 1), Math.min(web.travelled, d));
-      segment(flight, vHand, vB);
+      tip.position.copy(vB); tip.scale.setScalar(Math.max(0.11, camera.position.distanceTo(vB) * 0.0025));
+      segment(flight, vHand, vB, 1.8, true);
+      segment(flightGlow, vHand, vB, 4.5, true);
     }
     miss.visible = !!view.missLine;
     if (view.missLine) {
@@ -380,6 +544,8 @@ export function createRenderer(canvas) {
     if (statsEl) {
       fpsAvg += (1 / Math.max(dt, 1e-3) - fpsAvg) * 0.05;
       statsEl.textContent = `calls ${gl.info.render.calls}  tris ${gl.info.render.triangles}  fps ${fpsAvg.toFixed(0)}`;
+      statsEl.dataset.calls = gl.info.render.calls;
+      statsEl.dataset.triangles = gl.info.render.triangles;
     }
   }
 
