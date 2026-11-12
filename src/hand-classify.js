@@ -33,24 +33,24 @@ export function gestureFromBends([i, m, r, p], prev = 'none') {
   return 'none';
 }
 
-// handedness: MediaPipe category {categoryName, score} (a bare string or null = unknown).
-// side follows the hand used: MediaPipe labels assume a mirrored selfie image but we feed it the raw camera,
-// so its 'Left' is the user's right hand -> 'R'. Below CFG.handSideMinScore the wrist's screen half decides.
+// side = the half of the MIRRORED preview the wrist is in (what the user sees: hand on the left = 'L'),
+// level = the wrist's height in that same preview. handedness is accepted but only informational.
 // opts.world: world landmarks for the bend angles (metric 3D, no aspect distortion); opts.prev: see gestureFromBends.
 export function classifyHand(lms, handedness, { world, prev } = {}) {
   const w = lms[0];
   const gesture = gestureFromBends(fingerBends(world ?? lms), prev);
-  const label = handedness?.score >= CFG.handSideMinScore ? handedness.categoryName : null;
-  const side = label === 'Left' ? 'R' : label === 'Right' ? 'L' : w.x < 0.5 ? 'L' : 'R';
   const [hi, mid] = CFG.handLevelCuts;
-  return { gesture, side, level: w.y < hi ? 'hi' : w.y < mid ? 'mid' : 'lo' };
+  return { gesture, side: w.x < 0.5 ? 'L' : 'R', level: w.y < hi ? 'hi' : w.y < mid ? 'mid' : 'lo' };
 }
+
+// Apparent hand size in the image: wrist -> middle-finger MCP. Pulling the hand toward the body shrinks it.
+export const handSize = (lms) => Math.sqrt(d2(lms[0], lms[9]));
 
 const GESTURE_KO = { shoot: '발사', fist: '주먹', open: '손바닥', none: '없음' };
 const LEVEL_KO = { hi: '위', mid: '가운데', lo: '아래' };
 // Status line text for the HUD: st = createHandController status (or null).
 export const handStatusText = (st) => !st || !st.hands ? '손 없음'
-  : `${GESTURE_KO[st.gesture] ?? '없음'} · ${st.side === 'L' ? '왼' : '오'} · ${LEVEL_KO[st.level] ?? '가운데'}`;
+  : `${GESTURE_KO[st.gesture] ?? '없음'} · ${st.side === 'L' ? '왼' : '오'} · ${LEVEL_KO[st.level] ?? '가운데'}${st.zip ? ' · 당기기!' : ''}`;
 
 // Returns the last gesture seen `frames` times in a row ('none' until then).
 export function createGestureGate(frames) {
@@ -75,12 +75,17 @@ export function createGestureGate(frames) {
 // If someone else clears the tracker while a hand still charges (the game calls tracker.cancel() on start and
 // on death, and drops presses outside play), the press is sent again: a gesture held through the start fires.
 // update([], t) with no detection only ages hands out, so it can run on frames without a new image.
+// Zip: while the aiming hand holds the gesture, its apparent size (handSize) dropping by CFG.handZipShrink within
+// CFG.handZipWindowMs (the hand pulled toward the body) sends {type:'zip'} once, then waits CFG.handZipCooldownMs.
+// Size, not wrist motion: it is scale-free and independent of where the hand is, while a downward wrist move
+// would fight the level (wrist height) the user aims with. status.zip is true during the cooldown (HUD 당기기!).
 export function createHandController(tracker, { mode = 'shoot', onShot = () => {} } = {}) {
   let slots = []; // {wrist, gate, stable, cur: classification, prev, seen, charging, on, run}
-  let active = null;
+  let active = null, zipAt = -Infinity;
   const press = (s, t) => {
     tracker.press(s.cur.side, s.cur.level, t);
     active = s;
+    s.sizes = [];
     onShot({ type: 'press', side: s.cur.side, level: s.cur.level });
   };
   return { update(hands, t) {
@@ -92,12 +97,10 @@ export function createHandController(tracker, { mode = 'shoot', onShot = () => {
       if (dd > CFG.handMatchMaxDist ** 2) break;
       if (!match.has(i) && !used.has(j)) { match.set(i, slots[j]); used.add(j); }
     }
-    // MediaPipe sometimes labels both hands the same: then neither label is trusted (screen half decides)
-    const twin = hands.length === 2 && hands[0].handedness?.categoryName === hands[1].handedness?.categoryName;
     hands.forEach((h, i) => {
       let s = match.get(i);
       if (!s) slots.push(s = { gate: createGestureGate(CFG.handStableFrames), charging: false, on: false, run: 0, prev: 'none' });
-      const c = classifyHand(h.landmarks, twin ? null : h.handedness, { world: h.world, prev: s.prev });
+      const c = classifyHand(h.landmarks, h.handedness, { world: h.world, prev: s.prev });
       s.prev = c.gesture;
       s.stable = s.gate(c.gesture);
       s.wrist = h.landmarks[0]; s.cur = c; s.seen = t;
@@ -108,6 +111,16 @@ export function createHandController(tracker, { mode = 'shoot', onShot = () => {
         s.charging = on;
         if (on) press(s, t);
         else if (s === active) { active = null; onShot({ type: 'release', ...tracker.release(null, null, t) }); }
+      }
+      if (s === active && s.charging) {
+        const size = handSize(h.landmarks), win = CFG.handZipWindowMs / 1000;
+        s.sizes = s.sizes.filter((e) => t - e.t <= win);
+        const peak = Math.max(size, ...s.sizes.map((e) => e.size));
+        s.sizes.push({ t, size });
+        if (size < peak * (1 - CFG.handZipShrink) && (t - zipAt) * 1000 >= CFG.handZipCooldownMs) {
+          zipAt = t; s.sizes = [];
+          onShot({ type: 'zip' });
+        }
       }
     });
     slots = slots.filter((s) => {
@@ -123,6 +136,7 @@ export function createHandController(tracker, { mode = 'shoot', onShot = () => {
       side: shown ? shown.cur.side : null,
       level: shown ? shown.cur.level : null,
       open: slots.some((s) => s.stable === 'open'),
+      zip: (t - zipAt) * 1000 < CFG.handZipCooldownMs,
     };
   } };
 }

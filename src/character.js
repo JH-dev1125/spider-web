@@ -21,6 +21,13 @@ export function poseTarget(pose, t, mirror, out = new Float64Array(JOINTS.length
     out[i * 3 + 1] = v[1] * s;
     out[i * 3 + 2] = v[2] * s;
   });
+  if (P.run) { // wall run: legs stride in opposite phase, knees bend most as each leg swings through
+    const a = K.runAmp * P.run, ph = t * K.runFreq;
+    out[JOINTS.indexOf('hipL') * 3] += a * Math.sin(ph);
+    out[JOINTS.indexOf('hipR') * 3] -= a * Math.sin(ph);
+    out[JOINTS.indexOf('knL') * 3] += a * 0.8 * Math.max(0, Math.cos(ph));
+    out[JOINTS.indexOf('knR') * 3] += a * 0.8 * Math.max(0, -Math.cos(ph));
+  }
   if (P.flail) { // fall: arms and legs thrash out of phase
     const f = K.flailAmp * P.flail;
     for (const [j, axis, ph] of [['shL', 2, 0], ['shR', 2, 2], ['elL', 0, 1], ['elR', 0, 3], ['hipL', 0, 4], ['hipR', 0, 5]]) {
@@ -194,17 +201,20 @@ export function createHero(THREE) {
   }
 
   // pos/vel/anchor/aimAt are three.js coords (Vector3); aimAt = where the web arm points, or null.
-  function update(poseName, t, dt, pos, vel, anchor, aimAt, out) {
+  // wall = player.wall (the run's face normal x, 0 when not wall-running).
+  function update(poseName, t, dt, pos, vel, anchor, aimAt, out, wall = 0) {
     if (poseName !== pose) { pose = poseName; poseSec = 0; } else poseSec += dt;
     const aim = anchor || aimAt;
     if (aim) mirror = aim.x < pos.x;
+    else if (pose === 'wallrun' && wall) mirror = wall < 0; // the free arm (shR, or shL mirrored) reaches off the wall
     blendPose(cur, poseTarget(pose, t, mirror, target), first ? 1e9 : dt);
     JOINTS.forEach((j, i) => J[j].rotation.set(cur[i * 3], cur[i * 3 + 1], cur[i * 3 + 2]));
 
     // body orientation: hang under the rope, spread flat in a glide, upright for tricks and falls
     vV.copy(vel);
     const horiz = vS.set(vel.x, 0, vel.z);
-    if (anchor) aimBasis(vD.subVectors(anchor, pos), vV, q);
+    if (pose === 'wallrun' && wall) aimBasis(vD.set(wall * 0.75, 0.65, 0), horiz.lengthSq() > 1 ? horiz : FWD, q); // feet on the face, tilted off it, running along it
+    else if (anchor) aimBasis(vD.subVectors(anchor, pos), vV, q);
     else if (pose === 'glide') aimBasis(vV.lengthSq() > 1 ? vV : FWD, vD.set(0, -1, 0), q);
     else aimBasis(vD.copy(UP).addScaledVector(horiz.normalize(), 0.35), horiz, q);
     if (first) root.quaternion.copy(q);

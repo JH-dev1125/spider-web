@@ -15,6 +15,7 @@ export const createPlayer = () => ({
   ropeMin: 0,
   swingPhase: 'none', // 'none' | 'descending' | 'ascending' (past the swing bottom)
   sawDescent: false,
+  wall: 0, // wall-running: the face's outward normal x (-1 = wall on the right, +1 = on the left), else 0
   alive: true,
 });
 
@@ -36,7 +37,7 @@ export function createPhysics(p) {
   world.addBody(hero);
   const anchor = new CANNON.Body({ mass: 0, collisionFilterGroup: 0, collisionFilterMask: 0 }); // rope end point
   world.addBody(anchor);
-  const ph = { world, hero, anchor, rope: null, reelRate: 0, boxes: new Map(), acc: 0, bounced: false };
+  const ph = { world, hero, anchor, rope: null, reelRate: 0, boxes: new Map(), acc: 0, bounced: false, zip: null, wall: null, wallCool: 0 };
   hero.addEventListener('collide', (e) => {
     if (Math.abs(e.contact.getImpactVelocityAlongNormal()) > CFG.bounceMinSpeed) ph.bounced = true;
   });
@@ -89,6 +90,7 @@ export function attach(ph, p, point) {
   eq.setSpookParams(CFG.ropeStiffness, CFG.ropeRelaxation, CFG.physicsStep); // the default assumes a 1/60 s step
   ph.world.addConstraint(ph.rope);
   ph.reelRate = 0;
+  ph.zip = null;
   p.anchor = { ...point };
   p.ropeLen = len; // the full length: reeling starts from here, so attaching never yanks the hero
   p.ropeMin = len * CFG.reelMinFactor;
@@ -102,6 +104,7 @@ export function release(ph, p) {
   if (!ph.rope) return false;
   ph.world.removeConstraint(ph.rope);
   ph.rope = null;
+  ph.zip = null;
   p.anchor = null;
   p.ropeLen = 0;
   p.swingPhase = 'none';
@@ -110,7 +113,70 @@ export function release(ph, p) {
 
 const copy = (v, o) => { o.x = v.x; o.y = v.y; o.z = v.z; };
 
-// Advance by dt in fixed steps (leftover time carries to the next frame). Events: 'bottom', 'bounce', 'dead'.
+// Zip: on = start pulling toward the anchor (held Space / a hand pull), off = stop. Does nothing without a rope.
+// The pull is a force, so the hero is never moved by position; it ends by itself on release or past the anchor.
+export function setZip(ph, on) {
+  if (!on || !ph.rope) { ph.zip = null; return false; }
+  if (!ph.zip) ph.zip = { closing: false };
+  return true;
+}
+
+// Zip after a step: passed the anchor (at or beyond its z, within zipReleaseDist, or moving away once closing) = let go.
+// So a zip at an anchor already behind him just lets go.
+function zipCheck(ph, p, events) {
+  const { hero, anchor } = ph, z = ph.zip;
+  const d = anchor.position.vsub(hero.position), dist = d.length();
+  const closing = dist > 1e-6 ? d.dot(hero.velocity) / dist : 0;
+  if (closing > 1) z.closing = true;
+  if (d.z <= 0 || dist < CFG.zipReleaseDist || (z.closing && closing <= 0)) {
+    release(ph, p); // the velocity is untouched: he flies on with all of it
+    events.push('released', 'zipped');
+  }
+}
+
+// Side faces (x-facing) of every structure box the hero's centre is beside: [{s, n, x}], n = outward normal x.
+function sideFace(ph, pos, skin) {
+  const r = CFG.heroRadius + skin;
+  for (const { structure: s } of ph.boxes.values()) {
+    if (pos.y < s.min.y || pos.y > s.max.y || pos.z < s.min.z || pos.z > s.max.z) continue;
+    if (pos.x <= s.min.x && s.min.x - pos.x < r) return { s, n: -1, x: s.min.x };
+    if (pos.x >= s.max.x && pos.x - s.max.x < r) return { s, n: 1, x: s.max.x };
+  }
+  return null;
+}
+
+// Wall run after a step. v0 = the velocity before the step (the hit has already bounced it).
+function wallStep(ph, p, v0, events) {
+  const { hero } = ph, v = hero.velocity, h = CFG.physicsStep;
+  ph.wallCool = Math.max(0, ph.wallCool - h);
+  const w = ph.wall;
+  if (w) {
+    w.sec += h;
+    const still = sideFace(ph, hero.position, CFG.wallRunSkin);
+    if (w.sec < CFG.wallRunSec && still && still.n === w.n) {
+      v.x = 0; // held on the face: no bounce, no drifting off
+      if (Math.abs(v.z) < Math.abs(w.fwd)) v.z = w.fwd; // keeps the run speed (drag is cancelled)
+      return;
+    }
+    const J = CFG.wallJump, f = Math.sign(w.fwd) || 1;
+    v.x += w.n * J.out; v.y = Math.max(v.y, 0) + J.up; v.z += f * J.fwd;
+    ph.wall = null; ph.wallCool = CFG.wallRunCooldownSec; p.wall = 0;
+    events.push('walljump');
+    return;
+  }
+  if (ph.wallCool > 0) return;
+  const f = sideFace(ph, hero.position, CFG.wallRunSkin);
+  if (!f || -f.n * v0.x < CFG.wallRunMinSpeed) return; // not moving into that face fast enough
+  ph.wall = { ...f, sec: 0, fwd: v0.z };
+  v.x = 0;
+  v.y = Math.max(v.y, -CFG.wallRunMaxSink);
+  v.z = v0.z;
+  p.wall = f.n;
+  events.push('wallrun');
+}
+
+// Advance by dt in fixed steps (leftover time carries to the next frame).
+// Events: 'bottom', 'bounce', 'dead', 'released' + 'zipped' (a zip passed its anchor), 'wallrun', 'walljump'.
 export function stepPhysics(ph, p, dt) {
   const events = [];
   if (!p.alive) return events;
@@ -120,6 +186,12 @@ export function stepPhysics(ph, p, dt) {
     ph.acc -= h;
     const v = hero.velocity, k = CFG.airDrag * CFG.heroMass * v.length();
     hero.force.x -= k * v.x; hero.force.y -= k * v.y; hero.force.z -= k * v.z; // cleared by every step
+    const v0 = { x: v.x, y: v.y, z: v.z };
+    if (ph.wall) hero.force.y += CFG.heroMass * CFG.gravity * (1 - CFG.wallRunGravity); // barely sinks on the wall
+    if (ph.zip) {
+      const d = ph.anchor.position.vsub(hero.position), dist = d.length();
+      if (dist > 1e-6 && d.dot(v) / dist < CFG.zipMaxSpeed) hero.force.vadd(d.scale(CFG.zipAccel * CFG.heroMass / dist), hero.force);
+    }
     if (ph.rope) {
       let len = ph.rope.distance;
       const d = hero.position.distanceTo(ph.anchor.position);
@@ -130,6 +202,8 @@ export function stepPhysics(ph, p, dt) {
       ph.rope.distance = p.ropeLen = len;
     }
     ph.world.step(h);
+    if (ph.zip) zipCheck(ph, p, events);
+    wallStep(ph, p, v0, events);
     if (ph.rope) {
       if (v.y <= 0) p.sawDescent = true;
       if (p.swingPhase === 'descending' && p.sawDescent && v.y > 0) { p.swingPhase = 'ascending'; events.push('bottom'); }
@@ -140,6 +214,7 @@ export function stepPhysics(ph, p, dt) {
     }
     if (hero.position.y <= CFG.heroRadius + 0.05) { // touching the street
       release(ph, p);
+      ph.wall = null; p.wall = 0;
       hero.velocity.setZero();
       p.alive = false;
       events.push('dead');

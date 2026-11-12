@@ -5,6 +5,7 @@ import { CFG } from '../src/config.js';
 import { followCamera, speedK, shakeOffset, speedLineK, wrapZ, surfaceNormal } from '../src/render-math.js';
 import { poseTarget, blendPose, flipAngle, JOINTS } from '../src/character.js';
 import { createPlayer } from '../src/player.js';
+import { createGame, stepGame, createBot } from '../src/game.js';
 
 const R = CFG.render;
 const near = (a, b, eps = 1e-9) => Math.abs(a - b) < eps;
@@ -32,7 +33,7 @@ test('faster player gives wider fov, clamped to [fovMin, fovMax]', () => {
 test('camera smoothing: partial step, frame-rate independent', () => {
   const p = createPlayer();
   const prev = followCamera(p, null, 1 / 60);
-  p.pos.x += 4; p.pos.y += 4; p.pos.z += 4;
+  p.pos.x += 0.5; p.pos.y += 0.5; // within the leash (a bigger jump is pulled in, on purpose); z still leads by vel.z
   const one = followCamera(p, prev, 1 / 30);
   assert.ok(one.x > prev.x && one.x < p.pos.x);
   assert.ok(one.y > prev.y && one.z > prev.z);
@@ -152,4 +153,75 @@ test('camera has no position jump at the corridor edge', () => {
   p.pos.x += 0.002;
   const b = followCamera(p, null, 0);
   assert.ok(Math.abs(b.x - a.x) < 0.003);
+});
+
+// "The hero is a 40 px speck far ahead": run real swings (fast release, zips, wall runs) through the camera and
+// check every frame that he stays big (>= 1/5 of the screen height), near the middle, within the leash, and the
+// camera never sits inside a box.
+const heroScreen = (c, p) => {
+  const norm = (v) => { const n = Math.hypot(...v); return v.map((x) => x / n); };
+  const f = norm([c.lx - c.x, c.ly - c.y, c.lz - c.z]);
+  const r = norm([f[2], 0, -f[0]]);
+  const u = [f[1] * r[2], f[2] * r[0] - f[0] * r[2], -f[1] * r[0]];
+  const dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
+  const d = [p.x - c.x, p.y - c.y, p.z - c.z], depth = dot(d, f), half = depth * Math.tan(c.fovDeg * Math.PI / 360);
+  return { height: CFG.character.height / (2 * half), sx: dot(d, r) / half, sy: dot(d, u) / half, depth };
+};
+const W = CFG.corridorHalfWidth, DT = 1 / 60;
+const WANT = Math.hypot(R.camWallGap, R.camUp, R.camBack); // the largest desired offset (at a wall)
+const corridor = (g) => {
+  g.world.structures = [
+    { id: 'CL:base', kind: 'tower', attach: true, min: { x: -W - 20, y: 0, z: -50 }, max: { x: -W, y: 200, z: 3000 } },
+    { id: 'CR:base', kind: 'tower', attach: true, min: { x: W, y: 0, z: -50 }, max: { x: W + 20, y: 200, z: 3000 } },
+  ];
+  g.world.nextZ = { L: Infinity, R: Infinity };
+};
+// Runs the bot (zipping or not) for up to `sec` with the camera; calls check(frame info) every frame.
+function filmBot(seed, zip, sec, setupCourse, check) {
+  const g = createGame(seed), bot = createBot({ zip });
+  setupCourse?.(g);
+  let c = null;
+  const seen = new Set();
+  for (let i = 0; i < 60 * sec && g.player.alive; i++) {
+    for (const e of stepGame(g, DT, bot(g, DT))) seen.add(e);
+    const p = g.player;
+    c = followCamera(p, c, DT, g.world.structures);
+    check({ c, p, s: heroScreen(c, p.pos), at: `seed ${seed} zip ${zip} frame ${i}`, g });
+  }
+  return seen;
+}
+const leashOk = ({ c, p, at }) => assert.ok(Math.hypot(c.x - p.pos.x, c.y - p.pos.y, c.z - p.pos.z) <= WANT * CFG.camLeash + 1e-9, `${at}: beyond the leash`);
+const framed = (s) => s.depth > 0 && s.height >= 0.2 && Math.abs(s.sx) < 0.6 * 16 / 9 && Math.abs(s.sy) < 0.6;
+
+test('camera: through swing ends, fast releases, zips and wall runs the hero stays >= 1/5 of the screen, central, leashed', () => {
+  const seen = new Set();
+  for (const seed of [1, 2, 3, 4]) for (const zip of [false, true]) {
+    let fast = 0;
+    const ev = filmBot(seed, zip, 15, corridor, (f) => {
+      leashOk(f);
+      assert.ok(framed(f.s), `${f.at}: hero ${(f.s.height * 100).toFixed(1)}% tall at ${f.s.sx.toFixed(2)}, ${f.s.sy.toFixed(2)}`);
+      assert.ok(f.c.fovDeg >= R.fovMin - 1e-9 && f.c.fovDeg <= R.fovMax + 1e-9);
+      for (const b of f.g.world.structures) assert.ok(!['x', 'y', 'z'].every((k) => f.c[k] > b.min[k] && f.c[k] < b.max[k]), `${f.at}: camera inside ${b.id}`);
+      fast = Math.max(fast, Math.hypot(f.p.vel.x, f.p.vel.y, f.p.vel.z));
+    });
+    ev.forEach((e) => seen.add(e));
+    assert.ok(fast > 30, `seed ${seed}: never fast (${fast.toFixed(1)} m/s)`);
+  }
+  for (const e of ['released', 'zipped', 'wallrun', 'walljump']) assert.ok(seen.has(e), `never saw ${e}`);
+});
+
+// Generated courses add alleys and back lots where a tower can stand right behind him: the spring arm then pulls
+// the camera in. The leash always holds; framing holds on all but a sliver of frames.
+test('camera on generated courses: always leashed, the hero framed >= 99.5% of frames', () => {
+  let n = 0, good = 0;
+  for (let seed = 1; seed <= 8; seed++) for (const zip of [false, true]) filmBot(seed, zip, 15, null, (f) => { leashOk(f); n++; if (framed(f.s)) good++; });
+  assert.ok(good / n >= 0.995, `${n - good} of ${n} frames off`);
+});
+
+test('wallrun pose strides with t (legs in opposite phase); walljump is a static tuck', () => {
+  const hip = (pose, t, j) => poseTarget(pose, t, false)[JOINTS.indexOf(j) * 3];
+  const T = Math.PI / 2 / CFG.character.runFreq; // a quarter stride
+  assert.ok(hip('wallrun', T, 'hipL') - hip('wallrun', 0, 'hipL') > 0.5);
+  assert.ok(hip('wallrun', T, 'hipR') - hip('wallrun', 0, 'hipR') < -0.5);
+  assert.equal(hip('walljump', 0, 'hipL'), hip('walljump', 1, 'hipL'));
 });

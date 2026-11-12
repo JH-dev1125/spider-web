@@ -12,10 +12,11 @@
 //              Boxes are added ahead (CFG.viewDistance) and removed behind (CFG.behindDistance).
 //   web        { from, to, dist, travelled, hit } | null — a web in flight (from = the hand, to = target point).
 //   missLine   { to, age } | null — a web that hit nothing holdable, shown briefly.
-//   pose       'swing' | 'glide' | 'roll' | 'tuck' | 'fall';  t: seconds;  shake: camera shake amount.
+//              wall: the face's outward normal x while wall-running (-1 wall on the right, +1 on the left), else 0.
+//   pose       'swing' | 'glide' | 'roll' | 'tuck' | 'fall' | 'wallrun' | 'walljump';  t: seconds;  shake: camera shake amount.
 import { CFG } from './config.js';
 import { makeRng, createWorld, updateWorld } from './world.js';
-import { createPlayer, createPhysics, syncStructures, raycast, attach, release, stepPhysics } from './player.js';
+import { createPlayer, createPhysics, syncStructures, raycast, attach, release, stepPhysics, setZip } from './player.js';
 import { aimVector } from './web.js';
 
 export const pickTrickPose = (rng) => {
@@ -71,8 +72,10 @@ function flyWeb(g, dt) {
   g.missLine = { to: w.to, age: 0 };
 }
 
-// actions: [{type: 'press', side, level} | {type: 'release'}]. A press launches a web (fixed range);
-// a release lets go of the rope and cancels a web still in flight. Returns events ('bottom', 'released', 'bounce', 'dead').
+// actions: [{type: 'press', side, level} | {type: 'release'} | {type: 'zip'} | {type: 'zipEnd'}]. A press launches a web
+// (fixed range); a release lets go of the rope and cancels a web still in flight; zip pulls hard along the attached rope
+// until zipEnd, a release, or passing the anchor (then the rope lets go by itself); without a rope zip does nothing.
+// Returns events ('bottom', 'released', 'zipped', 'bounce', 'wallrun', 'walljump', 'dead').
 export function stepGame(g, dt, actions) {
   dt = Math.min(dt, CFG.maxDt);
   const p = g.player;
@@ -87,16 +90,19 @@ export function stepGame(g, dt, actions) {
       else if (a.type === 'release') {
         g.web = null;
         if (release(g.phys, p)) events.push('released');
-      }
+      } else if (a.type === 'zip') setZip(g.phys, true);
+      else if (a.type === 'zipEnd') setZip(g.phys, false);
     }
     events.push(...stepPhysics(g.phys, p, dt));
     if (g.web && p.alive) flyWeb(g, dt);
     if (events.includes('bottom')) g.shake = CFG.render.shakePeak;
     if (events.includes('bounce')) g.shake = Math.max(g.shake, CFG.render.bounceShake);
     if (events.includes('released')) { g.pose = pickTrickPose(g.rng); g.trickSec = CFG.trickSec; }
+    if (events.includes('walljump')) { g.pose = 'walljump'; g.trickSec = CFG.trickSec; }
   } else g.web = null;
   g.trickSec = Math.max(0, g.trickSec - dt);
   if (!p.alive) g.pose = 'fall';
+  else if (p.wall) g.pose = 'wallrun';
   else if (p.anchor) g.pose = 'swing';
   else if (g.trickSec === 0) g.pose = 'glide';
   if (g.missLine && (g.missLine.age += dt) > CFG.missShowSec) g.missLine = null;
@@ -106,13 +112,14 @@ export function stepGame(g, dt, actions) {
 // Autopilot: while unattached, wait CFG.botWaitSec, then try all six aims and press the holdable one whose
 // swing bottom (anchor height - reeled rope) is highest; hold through the web's flight and release
 // once the swing has passed its bottom and climbs at CFG.botReleaseClimb (vel.y / speed), or stalls.
-// With nothing holdable it keeps looking every frame.
-export function createBot() {
-  let wait = 0, held = false;
+// With nothing holdable it keeps looking every frame. zip: also zip each rope anchored above and ahead (?autozip).
+export function createBot({ zip = false } = {}) {
+  let wait = 0, held = false, zipped = null;
   return (g, dt) => {
     const p = g.player;
     dt = Math.min(dt, CFG.maxDt);
     if (!p.alive) return [];
+    if (zip && held && p.anchor && zipped !== p.anchor && p.anchor.y > p.pos.y + 5 && p.anchor.z > p.pos.z + 10) { zipped = p.anchor; return [{ type: 'zip' }]; }
     if (held && p.anchor) {
       const v = p.vel, speed = Math.hypot(v.x, v.y, v.z);
       if (p.swingPhase !== 'ascending' || (v.y < CFG.botReleaseClimb * speed && speed > CFG.botStallSpeed)) return [];

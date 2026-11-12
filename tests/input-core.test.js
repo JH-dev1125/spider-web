@@ -74,3 +74,24 @@ test('attachKeyboard: press fires at once, keyup of the active key releases, blu
   off(); fire('keydown', 'KeyQ'); assert.equal(tr.state(t), null);
   assert.equal(acts.length, n);
 });
+
+// main.js keeps its own Space/Enter listener for start/restart and drops onShot actions outside play,
+// so on the title Space starts the game and the zip it also emits goes nowhere.
+test('attachKeyboard: Space down/up = zip / zipEnd (repeat ignored), aim untouched; the start listener still sees Space', () => {
+  const target = new EventTarget();
+  const tr = createChargeTracker();
+  const acts = [];
+  let mode = 'title', starts = 0;
+  attachKeyboard(target, tr, () => 0, (a) => { if (mode === 'play') acts.push(a); });
+  target.addEventListener('keydown', (e) => { if (e.code === 'Space' && !e.repeat && mode === 'title') { starts++; mode = 'play'; } });
+  const fire = (type, code, repeat = false) => { const e = new Event(type); e.code = code; e.repeat = repeat; target.dispatchEvent(e); };
+  fire('keydown', 'Space'); fire('keyup', 'Space');
+  assert.equal(starts, 1);
+  assert.deepEqual(acts.map((a) => a.type), ['zipEnd']); // the title's zip was dropped; a stray zipEnd is harmless
+  acts.length = 0;
+  fire('keydown', 'KeyE'); fire('keydown', 'Space'); fire('keydown', 'Space', true); fire('keyup', 'Space');
+  assert.deepEqual(acts.map((a) => a.type), ['press', 'zip', 'zipEnd']);
+  assert.ok(tr.state(0), 'Space does not touch the aim');
+  target.dispatchEvent(new Event('blur'));
+  assert.deepEqual(acts.slice(-2).map((a) => a.type), ['zipEnd', 'release']);
+});

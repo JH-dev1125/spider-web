@@ -469,7 +469,7 @@ export function createRenderer(canvas) {
   function render(view, dt) {
     const p = view.player;
     const web = view.web ?? null;
-    cam = followCamera(p, cam, dt);
+    cam = followCamera(p, cam, dt, view.structures);
     const [sx, sy] = shakeOffset(view.shake || 0, view.t);
     camera.position.set(cam.x, cam.y, -cam.z);
     camera.lookAt(cam.lx, cam.ly, -cam.lz);
@@ -490,7 +490,7 @@ export function createRenderer(canvas) {
     set3(vPos, p.pos); set3(vVel, p.vel);
     const anchor = p.anchor ? set3(vAnchor, p.anchor) : null;
     const aimAt = web ? set3(vAim, web.to) : view.missLine ? set3(vAim, view.missLine.to) : null;
-    hero.update(view.pose, view.t, dt, vPos, vVel, anchor, aimAt, vHand);
+    hero.update(view.pose, view.t, dt, vPos, vVel, anchor, aimAt, vHand, p.wall || (view.pose === 'wallrun' ? -1 : 0)); // ?debugPose=wallrun: a right wall
 
     rope.visible = splat.visible = !!anchor;
     const key = p.anchor ? `${p.anchor.x},${p.anchor.y},${p.anchor.z}` : '';

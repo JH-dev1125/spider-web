@@ -50,7 +50,7 @@ function onFrame(st, hands) {
   for (const h of hands) for (const p of h.landmarks) dots.fillRect(p.x * 640 - 3, p.y * 480 - 3, 6, 6); // already mirrored
   const aim = tracker.state(now());
   for (const [k, el] of Object.entries(cells)) el.className = aim && k === aim.side + aim.level ? 'aim' : k === st.side + st.level ? 'now' : '';
-  $('info').innerHTML = `손 ${st.hands}개<br>gesture: ${st.gesture}<br>side: ${st.side ?? '-'} · level: ${st.level ?? '-'}<br>heldSec: ${aim ? aim.heldSec.toFixed(2) : '-'}`;
+  $('info').innerHTML = `손 ${st.hands}개<br>gesture: ${st.gesture}<br>side (미리보기 절반): ${st.side ?? '-'} · level: ${st.level ?? '-'}<br>heldSec: ${aim ? aim.heldSec.toFixed(2) : '-'}`;
   // per hand: raw classification (no hysteresis), MediaPipe label + score, finger bends in degrees
   $('hands').innerHTML = hands.map((h) => {
     const c = classifyHand(h.landmarks, h.handedness, { world: h.world });
@@ -59,7 +59,7 @@ function onFrame(st, hands) {
       + `<br>bend 검지 ${b[0]} 중지 ${b[1]} 약지 ${b[2]} 새끼 ${b[3]}`;
   }).join('<hr>');
 }
-const onShot = (a) => { $('last').textContent = a.type === 'press' ? `press ${a.side} ${a.level}` : `release ${a.heldSec?.toFixed(2) ?? '-'}s`; };
+const onShot = (a) => { $('last').textContent = a.type === 'press' ? `press ${a.side} ${a.level}` : a.type === 'zip' ? 'zip (당기기!)' : `release ${a.heldSec?.toFixed(2) ?? '-'}s`; };
 
 const fail = (e) => {
   $('info').textContent = '웹캠을 쓸 수 없음';

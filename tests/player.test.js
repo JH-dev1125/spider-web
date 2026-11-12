@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG } from '../src/config.js';
-import { createPlayer, createPhysics, syncStructures, raycast, attach, release, stepPhysics } from '../src/player.js';
+import { createPlayer, createPhysics, syncStructures, raycast, attach, release, stepPhysics, setZip } from '../src/player.js';
 
 const DT = 1 / 60;
 const H = CFG.physicsStep;
@@ -151,4 +151,86 @@ test('landing on a roof never leaves the hero stuck: he runs forward off the edg
   syncStructures(ph, [{ id: 'roof', kind: 'tower', min: { x: -10, y: 0, z: -5 }, max: { x: 10, y: 30, z: 20 }, attach: true }]);
   for (let i = 0; i < 60 * 4 && p.alive; i++) stepPhysics(ph, p, 1 / 60);
   assert.ok(p.pos.z > 20 || !p.alive, `still on the roof at z=${p.pos.z}`);
+});
+
+// ---- wall run: a side-face hit with speed into it runs along the face, then jumps off ----
+const W = CFG.corridorHalfWidth;
+const face = () => box('wr:base', 'tower', { x: W, y: 0, z: -50 }, { x: W + 20, y: 150, z: 400 });
+function throwAtWall(vel, structures = [face()]) {
+  const s = setup({ pos: { x: W - 3, y: 60, z: 0 }, vel, structures });
+  const log = []; // per frame {ev, pos, vel}
+  for (let i = 0; i < 90; i++) {
+    const ev = stepPhysics(s.ph, s.p, DT);
+    log.push({ ev, pos: { ...s.p.pos }, vel: { ...s.p.vel }, wall: s.p.wall });
+    for (const b of structures) assert.ok(!inside(s.p.pos, b), `inside ${b.id} at frame ${i}`);
+  }
+  return { ...s, log };
+}
+
+test('wall run: thrown sideways into a tower face he runs along it for ~wallRunSec, held on, barely sinking', () => {
+  const { log } = throwAtWall({ x: 15, y: -6, z: 20 });
+  const r = log.findIndex((f) => f.ev.includes('wallrun')), j = log.findIndex((f) => f.ev.includes('walljump'));
+  assert.ok(r >= 0 && j > r, 'run then jump');
+  assert.ok(Math.abs((j - r) * DT - CFG.wallRunSec) <= 2 * DT, `ran ${((j - r) * DT).toFixed(3)} s`);
+  const run = log.slice(r, j);
+  for (const f of run) {
+    assert.equal(f.wall, -1);
+    assert.ok(W - f.pos.x <= CFG.heroRadius + CFG.wallRunSkin + 1e-6, `left the face: ${W - f.pos.x}`);
+    assert.ok(f.vel.z >= log[r - 1].vel.z - 1e-6, `forward speed kept: ${f.vel.z}`);
+  }
+  const T = run.length * DT, sink = run[0].pos.y - run.at(-1).pos.y;
+  assert.ok(sink < 0.5 * CFG.gravity * T * T, `sank ${sink.toFixed(2)} m in ${T.toFixed(2)} s`);
+  assert.ok(sink < CFG.wallRunMaxSink * T + 0.5 * CFG.gravity * CFG.wallRunGravity * T * T + 0.05);
+});
+
+test('wall jump: away from the wall, upward, forward speed kept', () => {
+  const { log } = throwAtWall({ x: 15, y: -6, z: 20 });
+  const j = log.findIndex((f) => f.ev.includes('walljump'));
+  const v = log[j].vel;
+  assert.ok(v.x < -CFG.wallJump.out * 0.9, `vx ${v.x}`);
+  assert.ok(v.y > CFG.wallJump.up * 0.9, `vy ${v.y}`);
+  assert.ok(v.z >= 20, `vz ${v.z}`);
+  assert.ok(log.at(-1).pos.x < W - 3, 'flew off the wall');
+});
+
+test('wall run: a slow bump or a roof landing is no wall run', () => {
+  assert.ok(!throwAtWall({ x: CFG.wallRunMinSpeed * 0.5, y: 0, z: 10 }).log.some((f) => f.ev.includes('wallrun')));
+  const roof = setup({ pos: { x: W + 10, y: 152, z: 0 }, vel: { x: 0, y: -8, z: 10 }, structures: [face()] });
+  for (let i = 0; i < 30; i++) assert.ok(!stepPhysics(roof.ph, roof.p, DT).includes('wallrun'));
+});
+
+test('wall run cooldown: driven straight back into the face, no new run until wallRunCooldownSec', () => {
+  const { p, ph } = setup({ pos: { x: W - 3, y: 60, z: 0 }, vel: { x: 15, y: 0, z: 20 }, structures: [face()] });
+  let t = 0, jumpT = null, again = null;
+  for (let i = 0; i < 180; i++, t += DT) {
+    if (jumpT !== null) ph.hero.velocity.x = 12; // keep shoving him into the wall
+    const ev = stepPhysics(ph, p, DT);
+    if (ev.includes('walljump') && jumpT === null) jumpT = t;
+    else if (ev.includes('wallrun') && jumpT !== null) { again = t; break; }
+  }
+  assert.ok(jumpT !== null && again !== null, 'ran again once the cooldown was over');
+  assert.ok(again - jumpT >= CFG.wallRunCooldownSec - DT, `ran again after ${(again - jumpT).toFixed(2)} s`);
+});
+
+test('wall run with a rope: the rope still holds him, and a zip into a wall lands in a wall run', () => {
+  const anchor = { x: W, y: 90, z: 60 };
+  const s = setup({ pos: { x: W - 3, y: 60, z: 0 }, vel: { x: 15, y: 0, z: 20 }, structures: [face()] });
+  assert.ok(attach(s.ph, s.p, anchor));
+  let ran = false;
+  for (let i = 0; i < 60; i++) {
+    ran = stepPhysics(s.ph, s.p, DT).includes('wallrun') || ran;
+    assert.ok(dist(s.p.pos, anchor) <= s.p.ropeLen + 0.5, `rope stretched at frame ${i}`);
+  }
+  assert.ok(ran && s.p.anchor, 'ran along the wall on the rope');
+  // zip at a wall anchor ahead: auto-release short of it, the momentum carries him into the face, a wall run
+  const z = setup({ pos: { x: 0, y: 60, z: 0 }, vel: { x: 0, y: 0, z: 12 }, structures: [face()] });
+  attach(z.ph, z.p, { x: W, y: 62, z: 30 });
+  setZip(z.ph, true);
+  const ev = [];
+  for (let i = 0; i < 120; i++) {
+    ev.push(...stepPhysics(z.ph, z.p, DT));
+    assert.ok(!inside(z.p.pos, face()), `zip: inside at frame ${i}`);
+  }
+  assert.ok(ev.includes('zipped'), 'zip let go');
+  assert.ok(ev.indexOf('wallrun') > ev.indexOf('zipped'), `events ${ev.join(' ')}`);
 });

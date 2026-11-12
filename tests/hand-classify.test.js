@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyHand, createGestureGate, createHandController, mirror, fingerBends, gestureFromBends } from '../src/hand-classify.js';
+import { CFG } from '../src/config.js';
 import { createChargeTracker } from '../src/input-core.js';
 import { hand, SHOOT, FIST, OPEN, NONE } from './hand-fixture.js';
 
@@ -112,9 +113,9 @@ test('controller: fist mode charges on fist, open releases; status reports open 
   let st;
   for (let k = 0; k < 3; k++, t += DT) st = ctrl.update([{ landmarks: hand(0.5, 0.5, OPEN), handedness: 'Left' }], t);
   assert.equal(shots.length, 1);
-  assert.deepEqual(st, { hands: 1, gesture: 'open', side: 'R', level: 'mid', open: true });
+  assert.deepEqual(st, { hands: 1, gesture: 'open', side: 'R', level: 'mid', open: true, zip: false });
   // hands counts tracked hands (seen within handLostMs), so frames without a detection don't flicker it to 0
-  assert.deepEqual(ctrl.update([], t), { hands: 1, gesture: 'open', side: 'R', level: 'mid', open: true });
+  assert.deepEqual(ctrl.update([], t), { hands: 1, gesture: 'open', side: 'R', level: 'mid', open: true, zip: false });
   assert.equal(ctrl.update([], t + 1).hands, 0);
 });
 
@@ -206,14 +207,48 @@ test('gestureFromBends: open and shoot are disjoint, hysteresis keeps the held g
   assert.equal(gestureFromBends([33, 33, 33, 33], 'open'), 'open');
 });
 
-test('side follows the hand used (MediaPipe label swapped for the raw camera), screen half as fallback', () => {
-  const R = { categoryName: 'Left', score: 0.95 }, L = { categoryName: 'Right', score: 0.95 };
-  // the user's right hand reaching across to the left half still shoots right, and vice versa
-  assert.equal(classifyHand(hand(0.3, 0.5, SHOOT), R).side, 'R');
-  assert.equal(classifyHand(hand(0.7, 0.5, SHOOT, { left: true }), L).side, 'L');
-  // unsure label: screen half
-  assert.equal(classifyHand(hand(0.3, 0.5, SHOOT), { ...R, score: 0.6 }).side, 'L');
-  assert.equal(classifyHand(hand(0.7, 0.5, SHOOT), { ...L, score: 0.6 }).side, 'R');
+// The side is where the user sees the hand in the mirrored preview, whichever hand it is and whatever MediaPipe says.
+test('side = half of the mirrored preview: x 0.2 -> L, x 0.8 -> R, for either hand and any label', () => {
+  for (const label of [null, 'Left', 'Right', { categoryName: 'Left', score: 0.99 }, { categoryName: 'Right', score: 0.99 }]) {
+    for (const left of [false, true]) {
+      assert.equal(classifyHand(hand(0.2, 0.5, SHOOT, { left }), label).side, 'L');
+      assert.equal(classifyHand(hand(0.8, 0.5, SHOOT, { left }), label).side, 'R');
+    }
+  }
+  // raw camera frame -> mirror() -> preview: a raw x of 0.8 is shown (scaleX(-1)) at 0.2, the left
+  assert.equal(classifyHand(mirror(hand(0.8, 0.5, SHOOT)), 'Right').side, 'L');
+  // the controller's press and the HUD status use the same side
+  const ctrl = createHandController(createChargeTracker(), { onShot: (a) => log.push(a) }), log = [];
+  let st;
+  for (let k = 0; k < 2; k++) st = ctrl.update([{ landmarks: hand(0.2, 0.8, SHOOT, { left: true }), handedness: { categoryName: 'Left', score: 0.99 } }], k * DT);
+  assert.deepEqual(log, [{ type: 'press', side: 'L', level: 'lo' }]);
+  assert.equal(st.side, 'L');
+});
+
+// Zip: the aiming hand, still in the shoot pose, shrinks quickly in the image (pulled toward the body).
+const pull = (scales, opts = {}) => {
+  const log = [], sts = [];
+  const ctrl = createHandController(createChargeTracker(), { onShot: (a) => log.push(a) });
+  scales.forEach((scale, k) => sts.push(ctrl.update([{ landmarks: hand(0.7, 0.5, opts.ext ?? SHOOT, { scale }) }], k * DT)));
+  return { zips: log.filter((a) => a.type === 'zip').length, log, sts };
+};
+test('hand zip: a quick shrink while holding the shoot pose zips once, shows 당기기!, then cools down', () => {
+  const quick = pull([1, 1, 1, 1, 0.92, 0.84, 0.76, 0.72, 0.72, 0.72]); // -28% in 3 frames (0.1 s)
+  assert.equal(quick.zips, 1);
+  assert.ok(quick.log.findIndex((a) => a.type === 'zip') > quick.log.findIndex((a) => a.type === 'press'));
+  assert.ok(quick.sts.at(-1).zip);
+  assert.match(handStatusText(quick.sts.at(-1)), /당기기!/);
+  // a slow drift toward the body (same 28% over 1 s) is not a pull
+  assert.equal(pull([1, 1, ...Array.from({ length: 30 }, (_, k) => 1 - 0.28 * (k + 1) / 30)]).zips, 0);
+  // small jitter is not a pull
+  assert.equal(pull([1, 1, 0.95, 1, 0.94, 1, 0.96, 1, 0.95]).zips, 0);
+  // not in the shoot pose (no rope held): nothing
+  assert.equal(pull([1, 1, 1, 0.8, 0.7, 0.6], { ext: OPEN }).zips, 0);
+  // pull, pull again within the cooldown: one zip; after the cooldown: a second
+  const n = Math.ceil(CFG.handZipCooldownMs / 1000 / DT);
+  assert.equal(pull([1, 1, 1, 0.7, 1, 1, 0.7]).zips, 1);
+  assert.equal(pull([1, 1, 1, 0.7, ...Array(n).fill(1), 0.7]).zips, 2);
+  assert.ok(!pull([1, 1, 1, 0.7, ...Array(n + 1).fill(1)]).sts.at(-1).zip, 'HUD clears after the cooldown');
 });
 
 // Both hands, mirrored positions and labels: identical timing, opposite sides.

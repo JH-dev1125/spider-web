@@ -30,6 +30,18 @@ export const CFG = deepFreeze({
   reelAccel: 6, // m/s^2 the reel spins up at once the rope is taut, so it never jerks the hero
   reelMinFactor: 0.5, // the reel stops at this fraction of the attach length
   minRopeLen: 3,
+  // zip (Space, or the hand pulled toward the body): a hard pull along the rope, auto-release past the anchor
+  zipAccel: 45, // m/s^2 toward the anchor (~4.6 g)
+  zipMaxSpeed: 55, // m/s: no more pull once closing this fast (stays under the 57 m/s no-tunnel test)
+  zipReleaseDist: 4, // m: closer than this to the anchor = passed, let go
+  // wall run: hitting a building's side face with speed toward it runs along it, then jumps off
+  wallRunMinSpeed: 4, // m/s into the face (before the hit) that starts a run; slower is a plain bump
+  wallRunSec: 0.4,
+  wallRunGravity: 0.15, // fraction of gravity while running
+  wallRunMaxSink: 1, // m/s: a faster fall is cut to this when the run starts
+  wallRunSkin: 0.15, // m: centre within heroRadius + this of the face counts as touching it
+  wallRunCooldownSec: 0.6, // no new run this long after a wall jump
+  wallJump: { out: 9, up: 6, fwd: 3 }, // m/s added at the end of a run: away from the wall, up, along the run
   ropeMaxForce: 1e5, // N, the rope's tension limit (an 80 kg hero at 40 m/s on a 30 m rope needs ~5 kN)
   ropeStiffness: 1e8, // cannon SPOOK constraint parameters for the rope
   ropeRelaxation: 2, // steps to correct a stretch: lower is stiffer (>= 1 stays stable)
@@ -84,7 +96,8 @@ export const CFG = deepFreeze({
   camNear: 0.5,
   camBack: 8.5,
   camUp: 2.2,
-  camFollow: 7, // 1/s, exponential smoothing rate
+  camFollow: 12, // 1/s, exponential smoothing rate (every axis also leads by vel / camFollow, so no steady lag)
+  camLeash: 1.25, // the camera is never farther from the hero than this x its desired offset (hero >= ~1/5 of the screen)
   fovMin: 62,
   fovMax: 92,
   fovFollow: 3,
@@ -98,12 +111,14 @@ export const CFG = deepFreeze({
   handCurlDeg: 40, // ... and middle and ring bend above this (half-curled still counts)
   handFistDeg: 90, // 'fist': all four bend above this
   handHystDeg: 10, // the gesture held last frame gets its thresholds loosened by this much
-  handSideMinScore: 0.8, // handedness score at or above this picks the side by hand; below = screen half (>1 = always screen half)
   handMinConfidence: 0.35, // MediaPipe detection / presence / tracking confidence (default 0.5)
   handLostMs: 300, // hand unseen this long while charging = cancel
   handLevelCuts: [1 / 3, 2 / 3], // wrist y (0 = top) below these: hi, mid; else lo
   handPromptTimeoutSec: 15, // camera permission prompt nobody answers = give up (hand 'failed', H retries)
   handRestartSec: 1, // open palm held this long on title/result = start
+  handZipShrink: 0.18, // shoot pose held and the hand's apparent size (wrist -> middle MCP) drops this much..
+  handZipWindowMs: 250, // ..within this window = pulled toward the body = zip
+  handZipCooldownMs: 600, // one zip per pull; the HUD shows 당기기! this long
   handMatchMaxDist: 0.2, // wrist moved farther than this (screen fraction) between frames = a different hand
   // render
   render: {
@@ -111,8 +126,10 @@ export const CFG = deepFreeze({
     camBack: 5, // m behind the hero: the ~1.8 m hero is ~1/4 of the screen at fovMin
     camUp: 1.4,
     lookAhead: 0.12, // s: the camera looks at pos + vel * lookAhead
-    lookUp: 0.6,
-    camWallGap: 4, // m: the camera stays this far inside the corridor walls
+    lookUp: 0, // m above the hero the look point sits (higher puts him low in the frame)
+    lookMaxSide: 1.2, // m: cap on the look point's lead sideways and up/down
+    camWallGap: 1.5, // m: at the corridor face the camera sits this far toward the street from the hero
+    camBoxMargin: 0.3, // m: the camera never gets closer than this to a structure box (< heroRadius: a hero on a wall fits)
     camSnap: 80, // m: a bigger jump (restart) snaps the camera instead of easing
     fovMin: 60, // a normal lens: anchors ~52 m ahead are already in view looking forward
     fovMax: 68, // only a slight widening with speed; more reads as fisheye distortion
@@ -217,12 +234,17 @@ export const CFG = deepFreeze({
       glide: { spine: [-0.1, 0, 0], neck: [-0.7, 0, 0], shL: [-0.2, 0, 1.55], elL: [-0.25, 0, 0], shR: [-0.2, 0, 1.55], elR: [-0.25, 0, 0], hipL: [0.1, 0, 0.5], knL: [0.25, 0, 0], hipR: [0.1, 0, 0.5], knR: [0.25, 0, 0] },
       roll: { spine: [-0.2, 0, 0.25], neck: [-0.3, 0, 0], shL: [-0.4, 0, 1.25], elL: [-0.7, 0, 0], shR: [-0.8, 0, 0.8], elR: [-1.2, 0, 0], hipL: [-0.7, 0, 0.3], knL: [1.1, 0, 0], hipR: [-0.1, 0, 0.15], knR: [0.35, 0, 0] },
       tuck: { spine: [-0.6, 0, 0], neck: [-0.4, 0, 0], shL: [-1.4, 0, 0.2], elL: [-1.6, 0, 0], shR: [-1.4, 0, 0.2], elR: [-1.6, 0, 0], hipL: [-2.3, 0, 0.1], knL: [2.5, 0, 0], hipR: [-2.3, 0, 0.1], knR: [2.5, 0, 0] },
+      wallrun: { spine: [0.3, 0, 0], neck: [-0.35, 0, 0], shL: [-0.7, 0, 0.35], elL: [-1.3, 0, 0], shR: [0.1, 0, 1.7], elR: [-0.2, 0, 0], hipL: [-0.4, 0, 0.1], knL: [1.0, 0, 0], hipR: [0.3, 0, 0.1], knR: [0.8, 0, 0], run: 1 },
+      walljump: { spine: [-0.5, 0, 0], neck: [-0.4, 0, 0], shL: [-1.0, 0, 0.7], elL: [-1.4, 0, 0], shR: [-1.0, 0, 0.7], elR: [-1.4, 0, 0], hipL: [-1.7, 0, 0.15], knL: [2.2, 0, 0], hipR: [-1.2, 0, 0.15], knR: [1.7, 0, 0] },
       fall: { spine: [0.25, 0, 0], neck: [-0.5, 0, 0], shL: [0, 0, 2.5], elL: [-0.7, 0, 0], shR: [0.2, 0, 2.1], elR: [-0.5, 0, 0], hipL: [-0.5, 0, 0.35], knL: [1.1, 0, 0], hipR: [0.2, 0, 0.2], knR: [0.6, 0, 0], flail: 1 },
     },
     tricks: ['roll', 'tuck', 'glide'],
+    runFreq: 16, // rad/s of the wall-run stride
+    runAmp: 0.7, // rad hip swing of the stride
   },
   keys: {
     KeyQ: ['L', 'hi'], KeyA: ['L', 'mid'], KeyZ: ['L', 'lo'],
     KeyE: ['R', 'hi'], KeyD: ['R', 'mid'], KeyC: ['R', 'lo'],
   },
+  zipKey: 'Space', // held during play = zip toward the anchor (on the title/result it starts the game)
 });

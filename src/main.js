@@ -32,7 +32,7 @@ window.addEventListener('resize', resize);
 resize();
 
 // Debug: ?autoplay starts at once with the bot; ?autoplay=<sec> stops the bot after <sec> so it dies;
-// ?t=<sec> fast-forwards (see the bottom).
+// ?t=<sec> fast-forwards (see the bottom); ?autozip makes the bot zip up its ropes.
 const q = new URLSearchParams(location.search);
 const autoplay = q.has('autoplay');
 const botSec = Number(q.get('autoplay')) || Infinity;
@@ -45,7 +45,7 @@ const now = () => performance.now() / 1000;
 
 let mode = 'title'; // 'title' | 'play' | 'over'
 let g = createGame(Date.now());
-let actions = []; // input queue for stepGame: {type:'press'|'release', ...}
+let actions = []; // input queue for stepGame: {type:'press'|'release'|'zip'|'zipEnd', ...}
 let overSec = 0;
 let result = null;
 let bot = null;
@@ -79,7 +79,7 @@ function start() {
   g = createGame(Date.now());
   actions = [];
   tracker.cancel(); // a key held through death must not release anything on the first frame
-  bot = autoplay ? createBot() : null;
+  bot = autoplay ? createBot({ zip: q.has('autozip') }) : null;
   mode = 'play';
 }
 
@@ -125,9 +125,11 @@ function drawHud() {
       ['WEB RUNNER', H.titlePx, H.color, true],
       ['왼쪽 Q · A · Z   /   오른쪽 E · D · C   (위 · 가운데 · 아래)', H.textPx, H.color],
       ['누르면 즉시 거미줄 → 누르고 있는 동안 스윙 → 떼면 날아감', H.textPx, H.color],
+      ['줄이 붙은 채 Space: 줄 당기기 (앵커를 지나면 저절로 놓고 날아감)', H.textPx, H.color],
       coarse ? ['PC(키보드/웹캠)에서 열어주세요', H.hudPx, H.accent, true] : ['Space: 키보드로 시작', H.hudPx, H.accent, true],
       ['바닥에 닿으면 끝 · 너무 오래 잡고 있으면 뒤로 되돌아가요', H.textPx, H.color],
-      hand === 'on' && ['검지·새끼 펴면 발사, 유지하면 스윙, 풀면 날아감 (손 위치 = 방향)', H.textPx, H.color],
+      hand === 'on' && ['검지·새끼 펴면 발사, 유지하면 스윙, 풀면 날아감 (미리보기 속 손 위치 = 방향)', H.textPx, H.color],
+      hand === 'on' && ['발사 자세로 손을 몸 쪽으로 확 당기면 줄 당기기', H.textPx, H.color],
       {
         off: ['H: 손동작 켜기', H.textPx, H.color],
         loading: ['웹캠 준비 중…', H.textPx, H.dim],
