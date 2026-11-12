@@ -182,6 +182,7 @@ function frame() {
     buildings: g.world.buildings,
     cam,
     aim: null, // no charge preview: a press fires at once
+    web: g.web, // web in flight from the hand, or null
     missLine: g.missLine,
     pose: q.get('debugPose') || g.pose, // ?debugPose=<name> pins a pose for screenshots
     t,

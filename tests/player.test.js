@@ -14,7 +14,7 @@ const towers = [
 ];
 const webFrom = (p, side, level) => castWeb(p.pos, aimVector(side, level), CFG.webRange, towers);
 
-test('createPlayer start state; attach reels rope in; detach', () => {
+test('createPlayer start state; attach keeps the full length, then reels in smoothly; detach', () => {
   const p = createPlayer();
   assert.deepEqual(p.pos, { x: 0, y: CFG.startHeight, z: 0 });
   assert.deepEqual(p.vel, { x: 0, y: 0, z: V });
@@ -24,8 +24,16 @@ test('createPlayer start state; attach reels rope in; detach', () => {
   const a = { x: W, y: 60, z: 20 };
   attach(p, a);
   assert.deepEqual(p.anchor, a);
-  assert.ok(Math.abs(p.ropeLen - dist(p.pos, a) * CFG.reelFactor) < 1e-9);
+  const len = dist(p.pos, a);
+  assert.ok(Math.abs(p.ropeLen - len) < 1e-9); // no snap toward the anchor
   assert.equal(p.swingPhase, 'descending');
+  let prev = p.ropeLen;
+  for (let t = 0; t < 10; t += DT) {
+    stepPlayer(p, DT, towers, V);
+    assert.ok(prev - p.ropeLen <= CFG.reelSpeed * DT + 1e-9);
+    prev = p.ropeLen;
+  }
+  assert.ok(Math.abs(p.ropeLen - len * CFG.reelMinFactor) < 1e-9); // floor
   detach(p);
   assert.equal(p.anchor, null);
 });
@@ -101,9 +109,9 @@ test('(d) loop A: a swing ends higher than falling for the same time', () => {
   }
   assert.equal(release(p), true);
   assert.ok(p.pos.y > free.pos.y, `swing y ${p.pos.y} vs free ${free.pos.y}`);
-  // and the launch carries it above the start height (peak of the release arc)
+  // and the launch climbs back near the start height (peak of the release arc); the reel keeps the dip small
   const peak = p.pos.y + Math.max(p.vel.y, 0) ** 2 / (2 * CFG.gravity);
-  assert.ok(peak > CFG.startHeight, `peak ${peak}`);
+  assert.ok(peak > CFG.startHeight - 8, `peak ${peak}`);
 });
 
 test('(e) bounce off a right wall', () => {

@@ -5,6 +5,7 @@ export const createPlayer = () => ({
   vel: { x: 0, y: 0, z: CFG.baseSpeed },
   anchor: null,
   ropeLen: 0,
+  ropeMin: 0,
   swingPhase: 'none',
   sawDescent: false,
   alive: true,
@@ -17,7 +18,8 @@ export function attach(p, point) {
   const len = dist(p.pos, point);
   if (len < CFG.minRopeLen) return false;
   p.anchor = { ...point };
-  p.ropeLen = len * CFG.reelFactor;
+  p.ropeLen = len; // the full length: shortening it here would yank the hero toward the anchor in one frame
+  p.ropeMin = len * CFG.reelMinFactor;
   p.swingPhase = 'descending';
   p.sawDescent = false;
   return true;
@@ -40,9 +42,11 @@ export function release(p) {
   return true;
 }
 
-// Rope constraint and phase tracking. Pushes 'bottom'. The rope holds until release() (player input).
-function swing(p, events) {
+// Reel in, rope constraint and phase tracking. Pushes 'bottom'. The rope holds until release() (player input).
+// Reeling moves the hero at most reelSpeed*dt per frame on top of its velocity (no teleport).
+function swing(p, events, dt) {
   const { pos, vel, anchor: a } = p;
+  p.ropeLen = Math.max(p.ropeMin, p.ropeLen - CFG.reelSpeed * dt);
   const d = { x: pos.x - a.x, y: pos.y - a.y, z: pos.z - a.z };
   const len = Math.hypot(d.x, d.y, d.z);
   if (len > p.ropeLen) {
@@ -97,7 +101,7 @@ export function stepPlayer(p, dt, buildings, minForwardSpeed) {
     pos.y = CFG.ceiling;
     vel.y = Math.min(vel.y, 0);
   }
-  if (p.anchor) swing(p, events);
+  if (p.anchor) swing(p, events, dt);
   // floor only in free flight: on a held rope it would pump energy forever and orbit the anchor
   else vel.z = Math.max(vel.z, minForwardSpeed);
   if (pos.y <= 0) {

@@ -18,20 +18,34 @@ export function createGame(seed) {
     pose: 'glide',
     trickSec: 0,
     missLine: null,
+    web: null, // web in flight: {from, to, dist, travelled, hit}
     shake: 0,
   };
   updateWorld(g.world, g.player.pos.z, 0, g.rng);
   return g;
 }
 
+const hand = (p) => ({ x: p.pos.x, y: p.pos.y + CFG.render.playerHand, z: p.pos.z });
+
+// A press launches a web from the hand. The target is cast now (buildings are static); it lands after
+// dist / webSpeed seconds. A held rope stays until the new web lands (last pressed wins on arrival).
 function fire(g, s) {
-  const p = g.player;
   const dir = aimVector(s.side, s.level);
-  const len = CFG.webRange;
-  const o = { x: p.pos.x, y: p.pos.y + CFG.render.playerHand, z: p.pos.z }; // same origin as the aim preview
-  const hit = castWeb(o, dir, len, g.world.buildings);
-  if (hit && attach(p, hit)) { g.missLine = null; return; }
-  g.missLine = { to: { x: o.x + dir.x * len, y: o.y + dir.y * len, z: o.z + dir.z * len }, age: 0 };
+  const from = hand(g.player);
+  const hit = castWeb(from, dir, CFG.webRange, g.world.buildings);
+  const to = hit || { x: from.x + dir.x * CFG.webRange, y: from.y + dir.y * CFG.webRange, z: from.z + dir.z * CFG.webRange };
+  g.web = { from, to, dist: Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z), travelled: 0, hit: !!hit };
+}
+
+// Advance the web in flight; on arrival attach (key still held, or it would have been cancelled) or show a miss.
+function flyWeb(g, dt) {
+  const w = g.web;
+  w.from = hand(g.player);
+  w.travelled = Math.min(w.dist, w.travelled + CFG.webSpeed * dt);
+  if (w.travelled < w.dist) return;
+  g.web = null;
+  if (w.hit && attach(g.player, w.to)) { g.missLine = null; return; }
+  g.missLine = { to: w.to, age: 0 };
 }
 
 // After death stepPlayer is inert: plain gravity, and the body stops dead once it is on the street.
@@ -44,8 +58,8 @@ function fall(p, dt) {
   if (p.pos.y === 0) v.x = v.y = v.z = 0;
 }
 
-// actions: [{type: 'press', side, level} | {type: 'release'}]. A press fires a web at once (fixed range);
-// a release lets go of the rope. Returns events ('bottom', 'released', 'bounce', 'dead').
+// actions: [{type: 'press', side, level} | {type: 'release'}]. A press launches a web (fixed range);
+// a release lets go of the rope and cancels a web still in flight. Returns events ('bottom', 'released', 'bounce', 'dead').
 export function stepGame(g, dt, actions) {
   dt = Math.min(dt, CFG.maxDt);
   const p = g.player;
@@ -57,13 +71,17 @@ export function stepGame(g, dt, actions) {
     updateWorld(g.world, p.pos.z, g.elapsed, g.rng);
     for (const a of actions) {
       if (a.type === 'press') fire(g, a);
-      else if (a.type === 'release' && release(p)) events.push('released');
+      else if (a.type === 'release') {
+        g.web = null;
+        if (release(p)) events.push('released');
+      }
     }
     events.push(...stepPlayer(p, dt, g.world.buildings, diff.speed));
+    if (g.web && p.alive) flyWeb(g, dt);
     if (events.includes('bottom')) g.shake = CFG.render.shakePeak;
     if (events.includes('bounce')) g.shake = Math.max(g.shake, CFG.render.bounceShake);
     if (events.includes('released')) { g.pose = pickTrickPose(g.rng); g.trickSec = CFG.trickSec; }
-  } else fall(p, dt);
+  } else { fall(p, dt); g.web = null; }
   g.trickSec = Math.max(0, g.trickSec - dt);
   if (!p.alive) g.pose = 'fall';
   else if (p.anchor) g.pose = 'swing';
@@ -72,8 +90,8 @@ export function stepGame(g, dt, actions) {
   return events;
 }
 
-// Simple autopilot: while unattached, wait CFG.botWaitSec then press 'hi' (alternating R/L) and hold;
-// release CFG.botHoldAfterBottomSec after the swing bottom. A miss is let go and retried.
+// Simple autopilot: while unattached, wait CFG.botWaitSec then press 'hi' (alternating R/L) and hold
+// through the web's flight; release CFG.botHoldAfterBottomSec after the swing bottom. A miss is let go and retried.
 export function createBot() {
   let side = 'R';
   let wait = 0, after = 0, held = false;
@@ -86,6 +104,7 @@ export function createBot() {
       held = false; wait = 0;
       return [{ type: 'release' }];
     }
+    if (held && g.web) return []; // web still flying
     if (held) { held = false; wait = 0; return [{ type: 'release' }]; } // missed: let go, retry
     if ((wait += dt) < CFG.botWaitSec) return [];
     held = true; after = 0;

@@ -10,7 +10,7 @@ export const CFG = deepFreeze({
   viewDistance: 260,
   behindDistance: 40,
   startHeight: 60, // forward webs mean long ropes: start higher so the first swings clear the street
-  ceiling: 160, // hMax = 144: room for hi anchors ~40 m above the hand
+  ceiling: 160, // hMax = 144: room for hi anchors well above the hand
   baseSpeed: 22,
   maxSpeed: 60,
   speedRampPerSec: 0.25,
@@ -23,18 +23,20 @@ export const CFG = deepFreeze({
   gapMaxEnd: 40,
   lenMin: 30,
   lenMax: 80,
-  hMinStartFactor: 1.6, // 96 m early: hi from the start height (anchor ~100 m) usually lands
+  hMinStartFactor: 1.6, // 96 m early: hi from the start height (anchor ~86 m) usually lands
   hMinEndFactor: 1.1,
   hMaxFactor: 0.9,
-  aimYawDeg: 25, // angle off straight-ahead: from the corridor centre every level lands 14/tan(25) = 30 m ahead
-  aimPitchDeg: { hi: 50, mid: 0, lo: -35 }, // hi 50: sin(50) ~ reelFactor, so a hi swing bottoms at the press height
+  aimYawDeg: 15, // angle off straight-ahead: from the corridor centre every level lands 14/tan(15) = 52 m ahead
+  aimPitchDeg: { hi: 25, mid: 0, lo: -30 }, // from the centre: hi = 60 m web rising 25 m, mid 54 m, lo 63 m dropping 31 m
   chargeMin: 12,
   chargeMax: 70,
   chargeFullSec: 1.0, // chargeMin/Max/FullSec: legacy charge preview (render.js chargeLength), unused by play
-  webRange: 85, // reaches the far wall from ~8 m off centre; longer cross shots dropped the bot into the street
-  reelFactor: 0.8, // swing bottom = press height + t*(sin(pitch) - reelFactor), t = web length
+  webRange: 135, // from beside one wall reaches the far wall (hi: 28 m across = 123 m web, ~100 m ahead)
+  webSpeed: 300, // m/s: a 60 m web lands in 0.2 s; a miss shows at full range after 0.45 s
+  reelSpeed: 25, // m/s the held rope shortens: ~0.4 m per frame, no snap on attach
+  reelMinFactor: 0.6, // reel stops at this fraction of the attach length; >= 0.63 the bot sinks, <= 0.55 it overshoots roofs
   minRopeLen: 3,
-  releaseBoostUp: 6, // was 9; with level hi swings 9 pumped the hero above the rooftops (hi then misses)
+  releaseBoostUp: 8,
   releaseBoostForward: 4,
   wallBounceLoss: 0.5,
   wallSkin: 0.05,
@@ -45,7 +47,7 @@ export const CFG = deepFreeze({
   trickSec: 0.6,
   overFallSec: 1, // death fall animation before the result screen
   overInputDelaySec: 0.3, // ignore Space/Enter right after dying so a held key can't skip the result
-  botWaitSec: 0.3, // ?autoplay and the headless bot test: free flight before the next press
+  botWaitSec: 0.1, // ?autoplay and the headless bot test: free flight before the next press
   botHoldAfterBottomSec: 0.2, // hold this long past the swing bottom, then let go
   // camera
   camNear: 0.5,
