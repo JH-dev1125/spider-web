@@ -13,7 +13,7 @@ test('keys cover 6 unique side/level combos', () => {
   }
 });
 
-test('charge range ordered', () => assert.ok(CFG.chargeMin < CFG.chargeMax));
+
 
 test('CFG deeply frozen', () => {
   assert.ok(Object.isFrozen(CFG));

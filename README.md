@@ -20,7 +20,8 @@ python -m http.server 8000
 | 오른쪽 | E | D | C |
 
 - 누르면 즉시 거미줄 → 누르고 있는 동안 스윙 → 떼면 날아감.
-- 너무 오래 잡고 있으면 진자처럼 뒤로 되돌아간다. 스윙 최저점을 막 지났을 때 떼는 것이 요령.
+- 물리 엔진(cannon-es)으로 움직인다. 떼는 순간의 속도가 그대로 유지되니, 최저점을 지나 위로 올라갈 때 떼면 멀리 날아간다.
+- 너무 오래 잡고 있으면 진자처럼 뒤로 되돌아간다.
 - Space / Enter: 시작, 죽은 뒤 다시 하기.
 
 웹캠 손동작 (제목 화면에서 `H`로 켠다. 키보드도 같이 동작)
@@ -65,8 +66,8 @@ Node 22.15 이상 필요. (`npm test`도 같은 명령)
 | 속도·중력·줄 길이·난이도 등 모든 숫자, 색, 키 배치 | `src/config.js` |
 | 캐릭터 모양·포즈 | `src/character.js` |
 | 빌딩·배경 그리기, 카메라 | `src/render.js` |
-| 줄 물리, 플레이어 움직임 | `src/web.js`, `src/player.js` |
-| 빌딩 생성 | `src/world.js` |
+| 줄 조준 / 물리 엔진 연동(줄·충돌) | `src/web.js` / `src/player.js` (엔진: `vendor/cannon-es.js`) |
+| 빌딩·구조물 생성(난이도, 막힌 구간 방지) | `src/world.js` |
 | 점수 | `src/score.js` |
 | 줄 발사, 포즈, 죽을 때 추락 | `src/game.js` |
 | 키보드·손 입력 공통 충전 처리 / 키 입력 | `src/input-core.js`, `src/keyboard.js` |

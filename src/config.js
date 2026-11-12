@@ -5,50 +5,80 @@ const deepFreeze = (o) => {
 
 export const CFG = deepFreeze({
   maxDt: 0.05,
-  gravity: 18,
-  corridorHalfWidth: 14,
-  viewDistance: 260,
-  behindDistance: 40,
-  startHeight: 60, // forward webs mean long ropes: start higher so the first swings clear the street
-  ceiling: 160, // hMax = 144: room for hi anchors well above the hand
-  baseSpeed: 22,
-  maxSpeed: 60,
-  speedRampPerSec: 0.25,
-  easySeconds: 20,
-  rampSeconds: 180,
-  startZ: -20,
-  gapMinStart: 4,
-  gapMaxStart: 14,
-  gapMinEnd: 10,
-  gapMaxEnd: 40,
-  lenMin: 30,
-  lenMax: 80,
-  hMinStartFactor: 1.6, // 96 m early: hi from the start height (anchor ~86 m) usually lands
-  hMinEndFactor: 1.1,
-  hMaxFactor: 0.9,
-  aimYawDeg: 15, // angle off straight-ahead: from the corridor centre every level lands 14/tan(15) = 52 m ahead
-  aimPitchDeg: { hi: 25, mid: 0, lo: -30 }, // from the centre: hi = 60 m web rising 25 m, mid 54 m, lo 63 m dropping 31 m
-  chargeMin: 12,
-  chargeMax: 70,
-  chargeFullSec: 1.0, // chargeMin/Max/FullSec: legacy charge preview (render.js chargeLength), unused by play
-  webRange: 135, // from beside one wall reaches the far wall (hi: 28 m across = 123 m web, ~100 m ahead)
-  webSpeed: 300, // m/s: a 60 m web lands in 0.2 s; a miss shows at full range after 0.45 s
-  reelSpeed: 25, // m/s the held rope shortens: ~0.4 m per frame, no snap on attach
-  reelMinFactor: 0.6, // reel stops at this fraction of the attach length; >= 0.63 the bot sinks, <= 0.55 it overshoots roofs
+  // physics: cannon-es (vendor/cannon-es.js), SI units (m, s, kg)
+  physicsStep: 1 / 120, // fixed step: each frame runs whole steps off an accumulator, so a dt sequence replays exactly
+  gravity: 9.81,
+  heroMass: 80,
+  heroRadius: 0.5, // the hero's collision sphere
+  airDrag: 0.003, // 1/m: quadratic drag, a = airDrag * v^2 (0.5 rho Cd A / m); terminal speed sqrt(g / airDrag) = 57 m/s
+  heroFriction: 0, // the hero slides along facades instead of sticking
+  heroRestitution: 0.2,
+  bounceMinSpeed: 4, // m/s impact speed along the contact normal that counts as a 'bounce' (camera shake)
+  corridorHalfWidth: 14, // tower faces line x = +-14 (the street corridor)
+  viewDistance: 260, // structures exist this far ahead of the hero
+  behindDistance: 40, // and are removed this far behind
+  startHeight: 50,
+  startSpeed: 12, // m/s forward at the start: a gentle leap, not a launch
+  baseSpeed: 22, // render speed-feel reference only (fov and speed lines start here)
+  maxSpeed: 60, // render speed-feel reference only (fov and speed lines are full here)
+  aimAhead: 52, // m: every web meets its side's corridor face this far ahead of the hero (from the centre: yaw 15 deg)
+  aimPitchDeg: { hi: 14, mid: 0, lo: -30 }, // from the centre: hi = 55.5 m web rising 13.4 m (was 25 deg: +25 m, out of view), mid 54 m level, lo 62 m dropping 31 m
+  webRange: 135, // from beside one wall reaches the far wall
+  webSpeed: 300, // m/s: a 54 m web lands in 0.18 s; a miss shows at full range after 0.45 s
+  reelSpeed: 8, // m/s the held rope shortens at full reel (a hand-over-hand pull; the constraint turns it into tension)
+  reelAccel: 6, // m/s^2 the reel spins up at once the rope is taut, so it never jerks the hero
+  reelMinFactor: 0.5, // the reel stops at this fraction of the attach length
   minRopeLen: 3,
-  releaseBoostUp: 8,
-  releaseBoostForward: 4,
-  wallBounceLoss: 0.5,
-  wallSkin: 0.05,
-  bounceMinSpeed: 2,
-  wallPushOff: 10, // m/s inward when free flight touches a face slower than bounceMinSpeed
+  ropeMaxForce: 1e5, // N, the rope's tension limit (an 80 kg hero at 40 m/s on a 30 m rope needs ~5 kN)
+  ropeStiffness: 1e8, // cannon SPOOK constraint parameters for the rope
+  ropeRelaxation: 2, // steps to correct a stretch: lower is stiffer (>= 1 stays stable)
   missShowSec: 0.25,
+  // level generator (world.js); z is distance along the course
+  level: {
+    startZ: -20,
+    easyZ: 400, // easy course before the difficulty ramp starts
+    rampZ: 4000, // metres from easiest to hardest
+    goodH: 42, // a tower on the corridor face at least this tall is a "sure anchor" (mid from <= 42 m, hi from <= 28 m)
+    maxGapStart: 30, // longest z stretch with no sure anchor on either side, early..
+    maxGapEnd: 70, // ..and late (a release at ~25 m/s carries > 100 m, so 70 m stays flyable)
+    alleyStart: [0, 0.8], // empty z between lots: early seams are narrower than the hero (1 m), later alleys he can fall into
+    alleyEnd: [2, 12],
+    towerLen: [24, 70],
+    towerHStart: [60, 120],
+    towerHEnd: [42, 150],
+    lowH: [12, 30],
+    depth: [18, 34],
+    sectionLen: [120, 320], // a stretch with buildings on both sides, or one side only
+    oneSideStart: 0,
+    oneSideEnd: 0.5,
+    weightsStart: { tower: 1, low: 0, frame: 0, crane: 0, gap: 0 }, // lot kinds on a built-up side
+    weightsEnd: { tower: 0.45, low: 0.15, frame: 0.15, crane: 0.1, gap: 0.15 },
+    offWeights: { low: 0.4, frame: 0.2, gap: 0.4 }, // the empty side of a one-side stretch
+    setbackChance: 0.35,
+    setbackInset: [4, 8],
+    setbackH: [10, 40],
+    ledgeChance: 0.3,
+    bridgeStart: 0, // chance a new tower gets a skybridge to an overlapping tower across the street (none in the easy start)
+    bridgeEnd: 0.3,
+    bridgeY: [30, 70],
+    frameLen: [20, 40],
+    frameDepth: [12, 22],
+    frameH: [30, 70],
+    beam: 1.6, // frame post/beam thickness: > 3 physics steps of travel at top speed, so nothing tunnels
+    gapLen: [15, 45],
+    craneLot: 18,
+    craneH: [60, 100],
+    craneReach: [6, 18], // the jib overhangs the street by this much
+  },
   // game flow
   trickSec: 0.6,
   overFallSec: 1, // death fall animation before the result screen
   overInputDelaySec: 0.3, // ignore Space/Enter right after dying so a held key can't skip the result
   botWaitSec: 0.1, // ?autoplay and the headless bot test: free flight before the next press
-  botHoldAfterBottomSec: 0.2, // hold this long past the swing bottom, then let go
+  botReleaseClimb: 0.6, // let go past the swing bottom once climbing at 30 degrees (vel.y / speed)..
+  botStallSpeed: 6, // ..or once the swing has slowed below this
+  botRopeMin: 20, // the bot skips ropes shorter (a wall it is next to) or longer (a slow, low swing) than these
+  botRopeMax: 120,
   // camera
   camNear: 0.5,
   camBack: 8.5,

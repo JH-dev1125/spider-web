@@ -1,251 +1,144 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG } from '../src/config.js';
-import { aimVector, castWeb } from '../src/web.js';
-import { createPlayer, attach, detach, release, stepPlayer } from '../src/player.js';
+import { createPlayer, createPhysics, syncStructures, raycast, attach, release, stepPhysics } from '../src/player.js';
 
 const DT = 1 / 60;
-const W = CFG.corridorHalfWidth;
-const V = CFG.baseSpeed;
+const H = CFG.physicsStep;
+const box = (id, kind, min, max, attachable = kind !== 'frame') => ({ id, kind, min, max, attach: attachable });
+const len3 = (v) => Math.hypot(v.x, v.y, v.z);
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
-const towers = [
-  { side: 'R', z0: 5, z1: 200, h: CFG.ceiling },
-  { side: 'L', z0: 5, z1: 200, h: CFG.ceiling },
-];
-const webFrom = (p, side, level) => castWeb(p.pos, aimVector(side, level), CFG.webRange, towers);
 
-test('createPlayer start state; attach keeps the full length, then reels in smoothly; detach', () => {
+function setup({ pos, vel, structures = [] } = {}) {
   const p = createPlayer();
-  assert.deepEqual(p.pos, { x: 0, y: CFG.startHeight, z: 0 });
-  assert.deepEqual(p.vel, { x: 0, y: 0, z: V });
-  assert.equal(p.anchor, null);
-  assert.equal(p.swingPhase, 'none');
-  assert.equal(p.alive, true);
-  const a = { x: W, y: 60, z: 20 };
-  attach(p, a);
-  assert.deepEqual(p.anchor, a);
-  const len = dist(p.pos, a);
-  assert.ok(Math.abs(p.ropeLen - len) < 1e-9); // no snap toward the anchor
-  assert.equal(p.swingPhase, 'descending');
-  let prev = p.ropeLen;
-  for (let t = 0; t < 10; t += DT) {
-    stepPlayer(p, DT, towers, V);
-    assert.ok(prev - p.ropeLen <= CFG.reelSpeed * DT + 1e-9);
+  if (pos) p.pos = { ...pos };
+  if (vel) p.vel = { ...vel };
+  const ph = createPhysics(p);
+  syncStructures(ph, structures);
+  return { p, ph };
+}
+const inside = (p, s) => ['x', 'y', 'z'].every((k) => p[k] > s.min[k] && p[k] < s.max[k]);
+
+test('free flight: plain gravity plus a little quadratic drag', () => {
+  const { p, ph } = setup({ vel: { x: 0, y: 0, z: 0 } });
+  for (let i = 0; i < 60; i++) stepPhysics(ph, p, DT);
+  assert.ok(p.vel.y < -9.7 && p.vel.y > -9.81, `vy ${p.vel.y}`);
+  assert.ok(Math.abs(p.pos.y - (CFG.startHeight - 0.5 * CFG.gravity)) < 0.15);
+});
+
+test('fixed step: dt is consumed in whole physics steps, the remainder carries over', () => {
+  const a = setup(), b = setup();
+  for (let i = 0; i < 120; i++) stepPhysics(a.ph, a.p, DT);
+  for (let i = 0; i < 240; i++) stepPhysics(b.ph, b.p, DT / 2);
+  assert.ok(dist(a.p.pos, b.p.pos) < 1e-9); // same steps, same result
+  const c = setup();
+  stepPhysics(c.ph, c.p, H * 0.5);
+  assert.equal(c.p.pos.y, CFG.startHeight); // not a whole step yet
+});
+
+test('air drag caps the fall near sqrt(g / airDrag)', () => {
+  const { p, ph } = setup({ pos: { x: 0, y: 3000, z: 0 }, vel: { x: 0, y: 0, z: 0 } });
+  for (let i = 0; i < 60 * 30; i++) stepPhysics(ph, p, DT);
+  const vt = Math.sqrt(CFG.gravity / CFG.airDrag);
+  assert.ok(Math.abs(-p.vel.y - vt) < 1, `${-p.vel.y} vs ${vt}`);
+});
+
+test('the rope pulls but never pushes; held taut it keeps the hero within its length', () => {
+  const anchor = { x: 0, y: 60, z: 30 };
+  const { p, ph } = setup({ pos: { x: 0, y: 50, z: 0 }, vel: { x: 0, y: 0, z: 10 } });
+  assert.ok(attach(ph, p, anchor));
+  for (let i = 0; i < 240; i++) {
+    stepPhysics(ph, p, DT);
+    // SPOOK lags the reel by about one step
+    assert.ok(dist(p.pos, anchor) <= p.ropeLen + CFG.reelSpeed * H * 1.5 + 0.01, `stretched at frame ${i}`);
+  }
+  // hero flying straight at the anchor: the rope goes slack and takes up the slack without pushing back
+  const s = setup({ pos: { x: 0, y: 60, z: 0 }, vel: { x: 0, y: 0, z: 20 } });
+  attach(s.ph, s.p, anchor);
+  stepPhysics(s.ph, s.p, DT);
+  assert.ok(Math.abs(s.p.vel.z - 20 * (1 - CFG.airDrag * 20 * DT)) < 0.01, `vz ${s.p.vel.z}`);
+});
+
+test('the rope only ever shortens: reeled smoothly to ropeMin (slack take-up may go shorter)', () => {
+  const anchor = { x: 14, y: 80, z: 40 };
+  const { p, ph } = setup({ pos: { x: 0, y: 50, z: 0 }, vel: { x: 0, y: 0, z: 0 } });
+  attach(ph, p, anchor);
+  const L0 = p.ropeLen;
+  assert.equal(p.ropeMin, L0 * CFG.reelMinFactor);
+  let prev = L0;
+  for (let i = 0; i < 60 * 8; i++) {
+    stepPhysics(ph, p, DT);
+    assert.ok(p.ropeLen <= prev + 1e-9 && p.ropeLen >= CFG.minRopeLen);
+    const taut = dist(p.pos, anchor) >= p.ropeLen - 0.01;
+    if (taut && prev > p.ropeMin) assert.ok(prev - p.ropeLen <= CFG.reelSpeed * DT + 1e-9, 'reel faster than reelSpeed');
     prev = p.ropeLen;
   }
-  assert.ok(Math.abs(p.ropeLen - len * CFG.reelMinFactor) < 1e-9); // floor
-  detach(p);
-  assert.equal(p.anchor, null);
+  assert.ok(p.ropeLen <= p.ropeMin + 1e-9);
 });
 
-test('(a) free fall: y strictly decreases until dead', () => {
-  const p = createPlayer();
-  let prev = p.pos.y;
-  let ev = [];
-  for (let i = 0; i < 10000 && !ev.includes('dead'); i++) {
-    ev = stepPlayer(p, DT, [], V);
-    if (!ev.includes('dead')) assert.ok(p.pos.y < prev);
-    prev = p.pos.y;
+test('release removes the rope and leaves the velocity exactly as the swing made it', () => {
+  const { p, ph } = setup({ vel: { x: 0, y: 0, z: 12 } });
+  attach(ph, p, { x: -14, y: 64, z: 52 });
+  for (let i = 0; i < 150; i++) stepPhysics(ph, p, DT);
+  const v = { ...p.vel };
+  const hv = ph.hero.velocity;
+  assert.ok(release(ph, p));
+  assert.deepEqual({ x: hv.x, y: hv.y, z: hv.z }, v);
+  assert.equal(p.anchor, null);
+  assert.equal(ph.world.constraints.length, 0);
+  assert.equal(release(ph, p), false);
+});
+
+test('solid: a hero thrown at 57 m/s into a tower or a frame beam never ends up inside it', () => {
+  const W = CFG.corridorHalfWidth;
+  const tower = box('t:base', 'tower', { x: W, y: 0, z: 0 }, { x: W + 20, y: 100, z: 200 });
+  const beam = box('f:post0', 'frame', { x: -0.8, y: 0, z: 60 }, { x: 0.8, y: 100, z: 60 + CFG.level.beam });
+  for (const [s, vel] of [[tower, { x: 57, y: 0, z: 5 }], [beam, { x: 0, y: 0, z: 57 }], [tower, { x: 40, y: 0, z: 40 }]]) {
+    const { p, ph } = setup({ pos: { x: 0, y: 60, z: 10 }, vel, structures: [s] });
+    for (let i = 0; i < 120; i++) {
+      stepPhysics(ph, p, DT);
+      assert.ok(!inside(p.pos, s), `${s.id}: inside at frame ${i} ${JSON.stringify(p.pos)}`);
+    }
   }
-  assert.ok(ev.includes('dead'));
+});
+
+test('raycast: closest hit, attach comes from the structure, frames and the street do not hold', () => {
+  const W = CFG.corridorHalfWidth;
+  const frame = [
+    box('f:post0', 'frame', { x: W, y: 0, z: 40 }, { x: W + 1.6, y: 40, z: 41.6 }),
+    box('f:post1', 'frame', { x: W, y: 0, z: 70 }, { x: W + 1.6, y: 40, z: 71.6 }),
+    box('f:beam0', 'frame', { x: W, y: 38.4, z: 40 }, { x: W + 1.6, y: 40, z: 71.6 }),
+  ];
+  const behind = box('t:base', 'tower', { x: W + 20, y: 0, z: 0 }, { x: W + 40, y: 80, z: 200 });
+  const { ph } = setup({ structures: [...frame, behind] });
+  const from = { x: 0, y: 20, z: 0 };
+  const through = raycast(ph, from, { x: Math.sin(0.3), y: 0, z: Math.cos(0.3) }, 200); // through the frame's open middle
+  assert.ok(through.attach && Math.abs(through.point.x - (W + 20)) < 1e-6);
+  const d = { x: W + 0.8, y: 0, z: 40.8 }; // straight at the first post
+  const post = raycast(ph, from, { x: d.x / len3(d), y: 0, z: d.z / len3(d) }, 200);
+  assert.ok(post && !post.attach && post.point.x >= W - 1e-6 && post.point.x < W + 1.6, 'a post blocks the web');
+  const street = raycast(ph, from, { x: 0, y: -1, z: 0 }, 200);
+  assert.ok(street && !street.attach && Math.abs(street.point.y) < 1e-6);
+  assert.equal(raycast(ph, from, { x: -1, y: 0, z: 0 }, 50), null);
+});
+
+test('syncStructures adds new boxes and removes the ones the world dropped', () => {
+  const a = box('a:base', 'tower', { x: 14, y: 0, z: 0 }, { x: 30, y: 50, z: 40 });
+  const b = box('b:base', 'tower', { x: -30, y: 0, z: 0 }, { x: -14, y: 50, z: 40 });
+  const { ph } = setup({ structures: [a, b] });
+  assert.deepEqual([...ph.boxes.keys()], ['a:base', 'b:base']);
+  syncStructures(ph, [b]);
+  assert.deepEqual([...ph.boxes.keys()], ['b:base']);
+  assert.ok(!ph.world.bodies.some((x) => x.structure === a));
+});
+
+test('touching the street is death: one dead event, the rope goes, the body stops', () => {
+  const { p, ph } = setup({ pos: { x: 0, y: 5, z: 0 } });
+  assert.ok(attach(ph, p, { x: 14, y: 4, z: 30 })); // a low anchor cannot hold him up
+  const ev = [];
+  for (let i = 0; i < 180; i++) ev.push(...stepPhysics(ph, p, DT));
+  assert.deepEqual(ev.filter((e) => e === 'dead'), ['dead']);
   assert.equal(p.alive, false);
-});
-
-test('(b) dt is clamped to maxDt', () => {
-  const p = createPlayer();
-  p.vel.y = -3;
-  const y0 = p.pos.y;
-  stepPlayer(p, 5, [], V);
-  const bound = 0.5 * CFG.gravity * CFG.maxDt ** 2 + 3 * CFG.maxDt + 1e-6;
-  assert.ok(y0 - p.pos.y <= bound, `drop ${y0 - p.pos.y} > ${bound}`);
-  assert.ok(p.pos.z <= V * CFG.maxDt + 1e-9);
-});
-
-test('(c) right-high-forward anchor: a held rope holds 5+ s with no auto-release', () => {
-  const p = createPlayer();
-  const a = webFrom(p, 'R', 'hi');
-  assert.ok(a && a.y > p.pos.y && a.z > p.pos.z && a.x > 0);
-  attach(p, a);
-  for (let t = 0; t < 6; t += DT) {
-    const ev = stepPlayer(p, DT, towers, V);
-    assert.ok(!ev.includes('released'));
-    assert.deepEqual(p.anchor, a);
-    assert.ok(dist(p.pos, p.anchor) <= p.ropeLen + 1e-6);
-  }
-  assert.ok(p.alive);
-});
-
-test('release(): boost + detach, true only when attached', () => {
-  const p = createPlayer();
-  assert.equal(release(p), false); // nothing held: no boost
-  assert.deepEqual(p.vel, { x: 0, y: 0, z: V });
-  attach(p, webFrom(p, 'R', 'hi'));
-  for (let i = 0; i < 600 && p.swingPhase !== 'ascending'; i++) stepPlayer(p, DT, towers, V);
-  const v = { ...p.vel };
-  assert.equal(release(p), true);
   assert.equal(p.anchor, null);
-  assert.equal(p.swingPhase, 'none');
-  assert.ok(Math.abs(p.vel.y - (v.y + CFG.releaseBoostUp)) < 1e-9);
-  assert.ok(Math.abs(p.vel.z - (v.z + CFG.releaseBoostForward)) < 1e-9);
-});
-
-test('held too long the rope swings you back (pendulum, no forward floor)', () => {
-  const p = createPlayer();
-  attach(p, webFrom(p, 'R', 'hi'));
-  let back = false;
-  for (let t = 0; t < 6 && !back; t += DT) { stepPlayer(p, DT, towers, V + 20); back = p.vel.z < 0; }
-  assert.ok(back, 'vel.z never went negative on a held rope');
-});
-
-test('(d) loop A: a swing ends higher than falling for the same time', () => {
-  const p = createPlayer();
-  const free = createPlayer();
-  attach(p, webFrom(p, 'R', 'hi'));
-  let after = 0; // release 0.2 s past the bottom
-  for (let i = 0; i < 600 && after < 0.2; i++) {
-    stepPlayer(p, DT, towers, V);
-    stepPlayer(free, DT, towers, V);
-    if (p.swingPhase === 'ascending') after += DT;
-  }
-  assert.equal(release(p), true);
-  assert.ok(p.pos.y > free.pos.y, `swing y ${p.pos.y} vs free ${free.pos.y}`);
-  // and the launch climbs back near the start height (peak of the release arc); the reel keeps the dip small
-  const peak = p.pos.y + Math.max(p.vel.y, 0) ** 2 / (2 * CFG.gravity);
-  assert.ok(peak > CFG.startHeight - 8, `peak ${peak}`);
-});
-
-test('(e) bounce off a right wall', () => {
-  const p = createPlayer();
-  p.pos.x = W - 0.2;
-  p.vel.x = 30;
-  const wall = [{ side: 'R', z0: -10, z1: 100, h: 80 }];
-  const ev = stepPlayer(p, DT, wall, V);
-  assert.ok(ev.includes('bounce'));
-  assert.ok(Math.abs(p.pos.x) < W);
-  assert.ok(p.vel.x < 0);
-  assert.ok(p.alive);
-});
-
-test('no building (gap or above roof): x clamped to the corridor', () => {
-  const p = createPlayer();
-  p.pos.x = -(W - 0.2);
-  p.vel.x = -30;
-  assert.deepEqual(stepPlayer(p, DT, [{ side: 'L', z0: 0, z1: 100, h: 10 }], V), []);
-  assert.equal(p.pos.x, -W);
-});
-
-test('rope dragging into the face: no jitter, not stuck, alive', () => {
-  // anchor high on the face plane: the pendulum's low point is |x| = W itself
-  const face = [{ side: 'R', z0: -50, z1: 400, h: 110 }];
-  for (const [x0, vx] of [[W - 0.1, 0], [W - 0.1, 0.5], [10, 1], [10, 8], [10, 20]]) {
-    const p = createPlayer();
-    p.pos.x = x0;
-    p.vel.x = vx;
-    attach(p, { x: W, y: 100, z: 25 });
-    let bounces = 0;
-    let contact = 0;
-    for (let t = 0; t < 6; t += DT) {
-      const ev = stepPlayer(p, DT, face, V);
-      if (ev.includes('bounce')) bounces++;
-      if (p.pos.x >= W - CFG.wallSkin - 1e-9) contact++;
-      assert.ok(Math.abs(p.pos.x) < W, `x ${p.pos.x}`);
-      if (p.anchor) assert.ok(dist(p.pos, p.anchor) <= p.ropeLen + 1e-6);
-    }
-    assert.ok(contact > 0, `vx ${vx}: never reached the face`);
-    assert.ok(p.anchor, `vx ${vx}: rope let go by itself`);
-    assert.ok(bounces <= (vx < 1 && x0 > W - 1 ? 0 : 2), `vx ${vx}: bounces ${bounces}`);
-    assert.ok(p.alive);
-  }
-});
-
-test('(f) free flight: vel.z never below minForwardSpeed; on a rope the floor is off', () => {
-  const min = V + 8;
-  const p = createPlayer();
-  for (let t = 0; t < 1; t += DT) {
-    stepPlayer(p, DT, towers, min);
-    assert.ok(p.vel.z >= min);
-  }
-  attach(p, webFrom(p, 'R', 'hi'));
-  let below = false;
-  for (let t = 0; t < 3; t += DT) { stepPlayer(p, DT, towers, min); below ||= p.vel.z < min; }
-  assert.ok(below, 'floor applied on the rope');
-});
-
-test('(g) ceiling caps height', () => {
-  const p = createPlayer();
-  p.vel.y = 100;
-  for (let t = 0; t < 3; t += DT) {
-    stepPlayer(p, DT, [], V);
-    assert.ok(p.pos.y <= CFG.ceiling);
-  }
-});
-
-test('anchor closer than minRopeLen is refused; free flight pushes off the face; web spam cannot hover', () => {
-  const face = [{ side: 'R', z0: -50, z1: 4000, h: 110 }];
-  const cast = (level) => castWeb(p.pos, aimVector('R', level), CFG.webRange, face);
-  const p = createPlayer();
-  p.pos.x = W - CFG.wallSkin;
-  assert.ok(cast('mid'));
-  assert.equal(attach(p, cast('mid')), false);
-  assert.equal(p.anchor, null);
-  stepPlayer(p, DT, face, V);
-  assert.equal(p.vel.x, -CFG.wallPushOff); // not glued to the face
-  let dead = false;
-  for (let t = 0; t < 20 && !dead; t += DT) {
-    release(p); // tap: press and let go every frame
-    for (const level of ['hi', 'mid', 'lo']) {
-      const a = !p.anchor && cast(level);
-      if (a) attach(p, a);
-    }
-    dead = stepPlayer(p, DT, face, V).includes('dead');
-  }
-  assert.ok(dead, 'spamming short webs on one face must not keep the player up');
-});
-
-test('release before the swing bottom detaches without the boost (tapping cannot pump height)', () => {
-  const p = createPlayer();
-  attach(p, webFrom(p, 'R', 'hi'));
-  stepPlayer(p, DT, towers, V);
-  const v = { ...p.vel };
-  assert.equal(release(p), true);
-  assert.equal(p.anchor, null);
-  assert.deepEqual(p.vel, v);
-});
-
-test('swing emits one bottom event, and stepPlayer never emits released', () => {
-  const p = createPlayer();
-  attach(p, webFrom(p, 'R', 'mid'));
-  const evs = [];
-  for (let i = 0; i < 600; i++) evs.push(...stepPlayer(p, DT, towers, V));
-  assert.deepEqual(evs.filter((e) => e === 'bottom' || e === 'released'), ['bottom']);
-});
-
-test('attach returns true for a normal anchor', () => {
-  const p = createPlayer();
-  assert.equal(attach(p, webFrom(p, 'R', 'hi')), true);
-});
-
-test('dead hang: no bottom event, rope stays attached', () => {
-  const p = createPlayer();
-  p.vel.z = 0;
-  attach(p, { x: 0, y: CFG.startHeight + 10, z: 0 }); // dead hang, no forward push
-  for (let t = 0; t < 6; t += DT) {
-    const ev = stepPlayer(p, DT, [], 0);
-    assert.ok(!ev.includes('bottom'), 'no bottom while the swing never ascends');
-  }
-  assert.ok(p.anchor);
-});
-
-test('bottom only after the lowest point: a rising attach does not count its first apex', () => {
-  const p = createPlayer();
-  p.vel.y = 15;
-  attach(p, webFrom(p, 'R', 'hi'));
-  let sawNeg = false;
-  let bottom = false;
-  for (let t = 0; t < 4 && !bottom; t += DT) {
-    bottom = stepPlayer(p, DT, towers, V).includes('bottom');
-    if (!bottom && p.vel.y <= 0) sawNeg = true;
-  }
-  assert.ok(bottom);
-  assert.ok(sawNeg, 'bottom before vy ever went negative');
+  assert.deepEqual(p.vel, { x: 0, y: 0, z: 0 });
 });
