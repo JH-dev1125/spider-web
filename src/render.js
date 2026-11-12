@@ -1,7 +1,7 @@
 import { CFG } from './config.js';
 import { hash01 as hash } from './world.js';
 import { aimVector, chargeLength } from './web.js';
-import { drawCharacter } from './character.js';
+import { drawCharacter, characterHand } from './character.js';
 
 const R = CFG.render;
 const C = CFG.colors;
@@ -52,16 +52,25 @@ export function makeCamera(player, prev, dt) {
 const rgb = (c) => `rgb(${c[0] | 0},${c[1] | 0},${c[2] | 0})`;
 const mix = (a, b, p) => a.map((v, i) => v + (b[i] - v) * p);
 const fogRamp = (near) => Array.from({ length: R.fogSteps }, (_, i) => rgb(mix(near, C.faceFar, i / (R.fogSteps - 1))));
-const FACE = fogRamp(C.faceNear);
+const hexRgb = (s) => [1, 3, 5].map((i) => parseInt(s.slice(i, i + 2), 16));
+const TINTS = R.facadeTints.map(fogRamp);
 const LIT = fogRamp(C.windowLit);
+const GLASS = { dark: fogRamp(hexRgb(C.windowDark)), curtain: fogRamp(R.curtainGlass) };
+const CORNICE = fogRamp(hexRgb(R.corniceColor));
+const STYLES = R.windowStyles;
+const HAND = { x: 0, y: 0 };
 const SL_ANG = Float64Array.from({ length: R.speedLineCount }, (_, i) => hash(i) * TAU);
 const SL_OFF = Float64Array.from({ length: R.speedLineCount }, (_, i) => hash(i + R.speedLineCount));
 const NO_DASH = [];
 const LIT_DRAWS = 3; // hash values per skyline window
 const sorted = [];
-let gradH = -1;
+let gradH = -1, gradW = -1;
 let skyGrad = null;
 let groundGrad = null;
+let sunGrad = null;
+let hazeGrad = null;
+let vignette = null;
+let vigW = 0;
 
 // per-frame state so hot loops project without allocating
 let W = 0, H = 0, CX = 0, CY = 0, F = 1, CAM = null;
@@ -87,8 +96,8 @@ function seg(ctx, ax, ay, az, bx, by, bz) {
 }
 
 function drawSky(ctx) {
-  if (gradH !== H) {
-    gradH = H;
+  if (gradH !== H || gradW !== W) {
+    gradH = H; gradW = W;
     skyGrad = ctx.createLinearGradient(0, 0, 0, CY);
     skyGrad.addColorStop(0, C.skyTop);
     skyGrad.addColorStop(0.5, C.skyMid);
@@ -96,9 +105,26 @@ function drawSky(ctx) {
     groundGrad = ctx.createLinearGradient(0, CY, 0, H);
     groundGrad.addColorStop(0, C.groundFar);
     groundGrad.addColorStop(1, C.ground);
+    const sx = CX + W * R.sunX, sr = H * 0.6;
+    sunGrad = ctx.createRadialGradient(sx, CY, 0, sx, CY, sr);
+    sunGrad.addColorStop(0, 'rgba(255,236,190,0.95)');
+    sunGrad.addColorStop(0.06, R.sunGlow);
+    sunGrad.addColorStop(1, 'rgba(255,190,120,0)');
+    hazeGrad = ctx.createLinearGradient(0, CY - H * 0.2, 0, CY + H * 0.06);
+    hazeGrad.addColorStop(0, 'rgba(255,170,120,0)');
+    hazeGrad.addColorStop(0.75, R.hazeGlow);
+    hazeGrad.addColorStop(1, 'rgba(255,170,120,0)');
+    const d = Math.hypot(CX, CY);
+    const r0 = d * 0.7;
+    vignette = ctx.createRadialGradient(CX, CY, r0, CX, CY, d);
+    vigW = r0 > CY ? Math.ceil(CX - Math.sqrt(r0 * r0 - CY * CY)) : CX;
+    vignette.addColorStop(0, 'rgba(4,4,18,0)');
+    vignette.addColorStop(1, R.vignette);
   }
   ctx.fillStyle = skyGrad;
   ctx.fillRect(0, 0, W, CY + 1);
+  ctx.fillStyle = sunGrad;
+  ctx.fillRect(CX + W * R.sunX - H * 0.6, CY - H * 0.6, H * 1.2, H * 0.6 + 1);
   ctx.fillStyle = groundGrad;
   ctx.fillRect(0, CY, W, H - CY);
 }
@@ -189,6 +215,111 @@ function drawGround(ctx, t) {
   }
 }
 
+const fogAt = (d) => Math.round(clamp01(d / CFG.viewDistance) * (R.fogSteps - 1));
+
+// Near LOD: one quad per window, only for columns on screen and rows on screen at each column.
+function drawGrid(ctx, b, xF, zFrom, zTo, st, seed) {
+  const cw = R.windowColSpacing, fh = R.floorH, zc = CAM.z + R.clipNear;
+  const floors = Math.floor((b.h - R.corniceH) / fh);
+  const c0 = Math.max(0, Math.floor((zFrom - b.z0) / cw));
+  const c1 = Math.min(Math.floor((b.z1 - b.z0) / cw), Math.ceil((zTo - b.z0) / cw), c0 + R.gridColsMax);
+  const gw = st.gw * cw, gh = st.gh * fh, ox = (cw - gw) * 0.5, oy = (fh - gh) * 0.5;
+  const fog = fogAt((zFrom + zTo) * 0.5 - CAM.z);
+  for (let pass = 0; pass < 2; pass++) {
+    ctx.fillStyle = pass ? LIT[fog] : GLASS[st.glass][fog];
+    ctx.beginPath();
+    for (let c = c0; c < c1; c++) {
+      let za = b.z0 + c * cw + ox;
+      const zb = za + gw;
+      if (zb <= zc) continue;
+      if (za < zc) za = zc;
+      const k = (zb - CAM.z) / F; // metres per px at the column's far edge, where most rows show
+      let r0 = Math.max(0, Math.floor((CAM.y - (H - CY) * k) / fh) - 1);
+      let r1 = Math.min(floors, Math.ceil((CAM.y + CY * k) / fh) + 1);
+      if (r1 - r0 > R.gridRowsMax) {
+        r0 = Math.max(r0, Math.floor(CAM.y / fh) - (R.gridRowsMax >> 1));
+        r1 = Math.min(r1, r0 + R.gridRowsMax);
+      }
+      for (let r = r0; r < r1; r++) {
+        if ((hash((seed * 512 + c) * 128 + r) < st.lit) !== (pass === 1)) continue;
+        const y0 = r * fh + oy;
+        quad(ctx, xF, y0, za, xF, y0 + gh, za, xF, y0 + gh, zb, xF, y0, zb);
+      }
+    }
+    ctx.fill();
+  }
+}
+
+// Mid LOD: one band per floor across the span, cut into columns by facade-coloured piers.
+function drawStripes(ctx, b, xF, zA, zB, st, seed, face) {
+  const cw = R.windowColSpacing, fh = R.floorH;
+  const floors = Math.floor((b.h - R.corniceH) / fh);
+  const gh = st.gh * fh, oy = (fh - gh) * 0.5;
+  const mid = (zA + zB) * 0.5 - CAM.z;
+  const fog = fogAt(mid);
+  for (let pass = 0; pass < 2; pass++) {
+    ctx.fillStyle = pass ? LIT[fog] : GLASS[st.glass][fog];
+    ctx.beginPath();
+    for (let r = 0; r < floors; r++) {
+      if ((hash((seed * 512 + 511) * 128 + r) < st.lit) !== (pass === 1)) continue;
+      const y0 = r * fh + oy;
+      quad(ctx, xF, y0, zA, xF, y0 + gh, zA, xF, y0 + gh, zB, xF, y0, zB);
+    }
+    ctx.fill();
+  }
+  ctx.strokeStyle = face[fog];
+  ctx.lineWidth = Math.min(R.mullionMaxPx, Math.max(1, (F / mid) * (1 - st.gw) * cw));
+  ctx.beginPath();
+  const top = floors * fh;
+  for (let z = b.z0 + Math.ceil((zA - b.z0) / cw) * cw, n = 0; z < zB && n < R.gridColsMax * 2; z += cw, n++) {
+    pj(xF, 0, z); ctx.moveTo(px, py);
+    pj(xF, top, z); ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+}
+
+function drawRoofItems(ctx, b, s, xF, seed) {
+  const h = b.h, len = b.z1 - b.z0, zc = CAM.z + R.clipNear;
+  if (hash(seed * 8 + 3) < R.tankChance) { // water tank on legs with a conical lid
+    const z = b.z0 + len * (0.2 + 0.5 * hash(seed * 8 + 4)) - 1.6;
+    const x = xF + s * R.buildingDepth * (0.3 + 0.4 * hash(seed * 8 + 5));
+    if (z > zc) {
+      ctx.strokeStyle = R.tankColor;
+      ctx.lineWidth = Math.max(1, (0.3 * F) / (z - CAM.z));
+      ctx.beginPath();
+      pj(x - 1.2, h, z); ctx.moveTo(px, py); pj(x - 1.2, h + 2, z); ctx.lineTo(px, py);
+      pj(x + 1.2, h, z); ctx.moveTo(px, py); pj(x + 1.2, h + 2, z); ctx.lineTo(px, py);
+      ctx.stroke();
+      ctx.fillStyle = R.tankColor;
+      ctx.beginPath();
+      quad(ctx, x - 1.6, h + 2, z, x - 1.6, h + 6, z, x + 1.6, h + 6, z, x + 1.6, h + 2, z);
+      ctx.fill();
+      ctx.fillStyle = R.tankTop;
+      ctx.beginPath();
+      pj(x - 1.9, h + 6, z); ctx.moveTo(px, py);
+      pj(x, h + 7.6, z); ctx.lineTo(px, py);
+      pj(x + 1.9, h + 6, z); ctx.lineTo(px, py);
+      ctx.fill();
+    }
+  }
+  if (hash(seed * 8 + 6) < R.antennaChance) {
+    const z = b.z0 + len * (0.55 + 0.35 * hash(seed * 8 + 7));
+    const x = xF + s * 2.5;
+    if (z > zc) {
+      pj(x, h + R.antennaH, z);
+      const tx = px, ty = py, sc = ps;
+      ctx.strokeStyle = R.tankColor;
+      ctx.lineWidth = Math.max(1, 0.25 * sc);
+      ctx.beginPath();
+      pj(x, h, z); ctx.moveTo(px, py); ctx.lineTo(tx, ty);
+      ctx.stroke();
+      const d = Math.max(2, 0.6 * sc);
+      ctx.fillStyle = R.antennaLight;
+      ctx.fillRect(tx - d * 0.5, ty - d * 0.5, d, d);
+    }
+  }
+}
+
 function drawBuilding(ctx, b) {
   const s = b.side === 'L' ? -1 : 1;
   const xF = s * CFG.corridorHalfWidth;
@@ -197,8 +328,13 @@ function drawBuilding(ctx, b) {
   const z1 = b.z1;
   if (z1 <= zA) return;
   const h = b.h;
-  const mid = (zA + z1) * 0.5 - CAM.z;
-  const fog = Math.round(clamp01(mid / CFG.viewDistance) * (R.fogSteps - 1));
+  const fog = fogAt((zA + z1) * 0.5 - CAM.z);
+  const seed = Math.floor(b.z0) * 2 + (s > 0 ? 1 : 0);
+  const face = TINTS[(hash(seed * 8 + 1) * TINTS.length) | 0];
+  const st = STYLES[(hash(seed * 8 + 2) * STYLES.length) | 0];
+  const detail = zA - CAM.z < R.stripeDist; // beyond this: flat colour + fog only
+  const below = CAM.y < h; // roof items hide behind the faces from below, stand in front of them from above
+  if (detail && below) drawRoofItems(ctx, b, s, xF, seed);
 
   if (b.z0 >= zA) { // end face toward the camera
     ctx.fillStyle = C.endFace;
@@ -206,45 +342,31 @@ function drawBuilding(ctx, b) {
     quad(ctx, xF, 0, b.z0, xF, h, b.z0, xB, h, b.z0, xB, 0, b.z0);
     ctx.fill();
   }
-  if (CAM.y > h) {
+  if (!below) {
     ctx.fillStyle = C.roof;
     ctx.beginPath();
     quad(ctx, xF, h, zA, xB, h, zA, xB, h, z1, xF, h, z1);
     ctx.fill();
   }
-  ctx.fillStyle = FACE[fog];
+  ctx.fillStyle = face[fog];
   ctx.beginPath();
   quad(ctx, xF, 0, zA, xF, h, zA, xF, h, z1, xF, 0, z1);
   ctx.fill();
 
-  // window bands: capped row count, lit/dark per row from a per-building seed
-  const rows = Math.max(1, Math.min(R.windowRowsMax, Math.floor(h / R.floorH)));
-  const step = h / rows;
-  const glass = step * R.windowFill;
-  const bseed = (Math.floor(b.z0) * 2 + (s > 0 ? 1 : 0)) * R.windowRowsMax;
-  for (let pass = 0; pass < 2; pass++) {
-    ctx.fillStyle = pass ? LIT[fog] : C.windowDark;
-    ctx.beginPath();
-    for (let r = 0; r < rows; r++) {
-      const lit = hash(bseed + r) < R.windowLitChance; // stateless: both passes agree per row
-      if (lit !== (pass === 1)) continue;
-      const y0 = r * step + (step - glass) * 0.5;
-      quad(ctx, xF, y0, zA, xF, y0 + glass, zA, xF, y0 + glass, z1, xF, y0, z1);
-    }
-    ctx.fill();
+  if (detail) {
+    // the face leaves the screen edge nearer than zVis, so its windows there are never seen
+    const zVis = CAM.z + (Math.abs(xF - CAM.x) * F) / CX - R.windowColSpacing;
+    const gA = Math.max(zA, zVis), gB = Math.min(z1, CAM.z + R.gridDist);
+    if (gB > gA) drawGrid(ctx, b, xF, gA, gB, st, seed);
+    const sA = Math.max(zA, CAM.z + R.gridDist), sB = Math.min(z1, CAM.z + R.stripeDist);
+    if (sB > sA) drawStripes(ctx, b, xF, sA, sB, st, seed, face);
   }
-  const cols = Math.min(R.windowColsMax, Math.ceil((z1 - b.z0) / R.windowColSpacing));
-  const cw = (z1 - b.z0) / cols;
-  ctx.strokeStyle = C.mullion;
-  ctx.lineWidth = Math.min(R.mullionMaxPx, Math.max(1, (F / mid) * R.mullionW));
+  // cornice ledge along the top
+  ctx.fillStyle = CORNICE[fog];
   ctx.beginPath();
-  for (let c = 1; c < cols; c++) {
-    const z = b.z0 + c * cw;
-    if (z <= zA) continue;
-    pj(xF, 0, z); ctx.moveTo(px, py);
-    pj(xF, h, z); ctx.lineTo(px, py);
-  }
-  ctx.stroke();
+  quad(ctx, xF, h - R.corniceH, zA, xF, h, zA, xF, h, z1, xF, h - R.corniceH, z1);
+  ctx.fill();
+  if (detail && !below) drawRoofItems(ctx, b, s, xF, seed);
 }
 
 function drawBuildings(ctx, buildings) {
@@ -254,9 +376,11 @@ function drawBuildings(ctx, buildings) {
   for (const b of sorted) drawBuilding(ctx, b);
 }
 
-function drawLine(ctx, from, to, alpha) {
+// web from the drawn hand (HX, HY, HZ) to a world point
+let HX = 0, HY = 0, HZ = 0;
+function drawLine(ctx, to, alpha) {
   ctx.beginPath();
-  if (!seg(ctx, from.x, from.y + R.playerHand, from.z, to.x, to.y, to.z)) return;
+  if (!seg(ctx, HX, HY, HZ, to.x, to.y, to.z)) return;
   ctx.globalAlpha = alpha;
   ctx.strokeStyle = C.web;
   ctx.lineWidth = Math.min(R.webMaxPx, Math.max(R.webMinPx, R.webWidth * segPs));
@@ -267,9 +391,9 @@ function drawLine(ctx, from, to, alpha) {
 function drawAim(ctx, pos, aim) {
   const d = aimVector(aim.side, aim.level);
   const len = chargeLength(aim.heldSec);
-  const y = pos.y + R.playerHand;
+  const y = pos.y + R.playerHand; // the cast itself starts here (game.js); the dash starts at the drawn hand
   ctx.beginPath();
-  if (!seg(ctx, pos.x, y, pos.z, pos.x + d.x * len, y + d.y * len, pos.z + d.z * len)) return;
+  if (!seg(ctx, HX, HY, HZ, pos.x + d.x * len, y + d.y * len, pos.z + d.z * len)) return;
   const ex = px, ey = py;
   ctx.setLineDash(R.aimDash);
   ctx.strokeStyle = C.aim;
@@ -314,19 +438,34 @@ export function drawFrame(ctx, w, h, view) {
   const sh = view.shake || 0;
   if (sh > 0) ctx.translate(Math.sin(t * R.shakeFreqX) * sh, Math.cos(t * R.shakeFreqY) * sh);
   drawSkyline(ctx);
+  ctx.fillStyle = hazeGrad; // warm horizon haze over the far skyline
+  ctx.fillRect(-W, CY - H * 0.2, W * 3, H * 0.26);
   drawGround(ctx, t);
   drawBuildings(ctx, view.buildings);
-  if (player.anchor) drawLine(ctx, player.pos, player.anchor, 1);
-  if (view.missLine) drawLine(ctx, player.pos, view.missLine.to, clamp01(1 - view.missLine.age / CFG.missShowSec));
-  if (view.aim) drawAim(ctx, player.pos, view.aim);
-  if (pj(player.pos.x, player.pos.y, player.pos.z)) {
-    // poses are authored reaching right; mirror about the body so the web hand faces the anchor
-    const flip = player.anchor && player.anchor.x < player.pos.x;
-    if (flip) { ctx.save(); ctx.translate(px + px, 0); ctx.scale(-1, 1); }
-    drawCharacter(ctx, px, py, ps, view.pose, t);
+  const pos = player.pos;
+  // poses are authored reaching right; mirror about the body so the web hand faces the web
+  const to = player.anchor || view.missLine?.to;
+  const flip = to ? to.x < pos.x : view.aim?.side === 'L';
+  const vis = pj(pos.x, pos.y, pos.z);
+  const sx = px, sy = py, s0 = ps;
+  HX = pos.x; HY = pos.y + R.playerHand; HZ = pos.z;
+  if (vis) {
+    characterHand(view.pose, t, s0, HAND);
+    HX = pos.x + (flip ? -HAND.x : HAND.x) / s0;
+    HY = pos.y - HAND.y / s0;
+  }
+  if (player.anchor) drawLine(ctx, player.anchor, 1);
+  if (view.missLine) drawLine(ctx, view.missLine.to, clamp01(1 - view.missLine.age / CFG.missShowSec));
+  if (view.aim) drawAim(ctx, pos, view.aim);
+  if (vis) {
+    if (flip) { ctx.save(); ctx.translate(sx + sx, 0); ctx.scale(-1, 1); }
+    drawCharacter(ctx, sx, sy, s0, view.pose, t);
     if (flip) ctx.restore();
   }
   ctx.restore();
   const v = player.vel;
   drawSpeedLines(ctx, Math.hypot(v.x, v.y, v.z), t);
+  ctx.fillStyle = vignette; // nothing to darken between the side bands
+  ctx.fillRect(0, 0, vigW, H);
+  ctx.fillRect(W - vigW, 0, vigW, H);
 }

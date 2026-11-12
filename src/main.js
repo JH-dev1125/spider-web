@@ -183,7 +183,7 @@ function frame() {
     cam,
     aim: null, // no charge preview: a press fires at once
     missLine: g.missLine,
-    pose: g.pose,
+    pose: q.get('debugPose') || g.pose, // ?debugPose=<name> pins a pose for screenshots
     t,
     shake: g.shake,
   });

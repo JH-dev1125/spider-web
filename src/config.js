@@ -83,14 +83,34 @@ export const CFG = deepFreeze({
     carLanes: [-8, -3, 3, 8],
     carGapChance: 0.55,
     buildingDepth: 22,
-    floorH: 4,
-    windowRowsMax: 24,
-    windowColSpacing: 3.5,
-    windowColsMax: 24,
-    windowFill: 0.5, // fraction of each floor that is glass
-    windowLitChance: 0.6,
-    mullionW: 0.25,
+    // facade LOD by distance from the camera: window grid < gridDist < stripes < stripeDist < flat + fog
+    floorH: 3,
+    windowColSpacing: 2.5,
+    gridDist: 70,
+    stripeDist: 170,
+    gridRowsMax: 32, // per column, only rows inside the screen
+    gridColsMax: 28,
+    // per-building window style, picked by hash: [glass width, glass height] as a fraction of a cell, lit chance
+    windowStyles: [
+      { gw: 0.6, gh: 0.55, lit: 0.55, glass: 'dark' }, // punched grid
+      { gw: 0.42, gh: 1, lit: 0.5, glass: 'dark' }, // vertical strips
+      { gw: 0.94, gh: 0.9, lit: 0.3, glass: 'curtain' }, // glass curtain wall
+    ],
+    facadeTints: [[70, 78, 112], [92, 76, 104], [58, 84, 106], [96, 92, 116]],
+    curtainGlass: [34, 52, 92],
+    corniceH: 0.8,
+    corniceColor: '#7d86b0',
+    tankChance: 0.5,
+    antennaChance: 0.4,
+    antennaH: 14,
+    antennaLight: '#ff4a4a',
+    tankColor: '#3a3048',
+    tankTop: '#544463',
     mullionMaxPx: 5,
+    sunX: 0.03, // fraction of the width right of centre: low sun at the end of the street
+    sunGlow: 'rgba(255,190,120,0.55)',
+    hazeGlow: 'rgba(255,170,120,0.18)',
+    vignette: 'rgba(4,4,18,0.5)',
     fogSteps: 8,
     webWidth: 0.06,
     webMinPx: 1.5,
@@ -153,24 +173,33 @@ export const CFG = deepFreeze({
   },
   character: {
     height: 1.8, // metres
-    minPx: 14,
+    drawScale: 1.35, // drawn larger than life so the hero reads at play distance
+    minPx: 95, // body unit clamp in px; the figure is ~0.95 units tall
+    maxPx: 135,
     rollSpeed: 9, // rad/s
     flailSpeed: 14,
-    flailAmp: 0.5,
-    limbW: 0.075, // fraction of height
-    // back view, unit = body height, y down, origin = body centre
+    flailAmp: 0.45,
+    blendRate: 14, // 1/s, pose-to-pose easing
+    // back view, unit = drawn body unit, y down, origin = body centre
     body: {
-      headY: -0.37, headR: 0.085, torsoTop: -0.27, torsoBot: 0.06, torsoW: 0.2, waistW: 0.15,
-      shoulderX: 0.1, shoulderY: -0.23, hipX: 0.05, hipY: 0.05,
-      arm: [0.17, 0.16], leg: [0.22, 0.21], spineW: 0.035, panelW: 0.05, seamW: 0.008, lensW: 0.18, lensH: 0.32,
+      headY: -0.375, headR: 0.078,
+      shoulderX: 0.115, shoulderY: -0.265, chestW: 0.13, waistW: 0.075, waistY: 0.02, hipX: 0.055, hipY: 0.04,
+      arm: [0.15, 0.14], armW: [0.062, 0.05], handR: 0.033,
+      leg: [0.2, 0.2], legW: [0.085, 0.06], footR: 0.038,
+      halo: 0.03, outline: 0.014, webW: 0.006, lensW: 0.55, lensH: 0.62,
     },
-    // [upper, lower-relative] rad, 0 = straight down, + = away from the body; scale = foreshortening
+    palette: {
+      blue: '#1d2f8a', web: '#3a0610', emblem: '#0c0c14',
+      outline: '#16060c', halo: 'rgba(255,214,170,0.32)', lensRim: '#0c0c14', shade: 'rgba(40,0,20,0.28)',
+    },
+    // limbs: [upper rad, lower rad relative, upper len scale, lower len scale]; 0 = straight down, + = away
+    // from the body. lean = body tilt rad (+ = toward the web hand), look = head turn -1..1 (lens shows).
     poses: {
-      swing: { armL: [0.6, 0.5], armR: [2.9, 0.1], legL: [0.2, -0.6], legR: [0.1, -0.3], limbScale: 1, spin: 0, flail: 0 },
-      glide: { armL: [1.9, 0.15], armR: [1.9, 0.15], legL: [0.4, 0.1], legR: [0.4, 0.1], limbScale: 1, spin: 0, flail: 0 },
-      roll: { armL: [0.5, -1.7], armR: [0.5, -1.7], legL: [0.35, -1.2], legR: [0.35, -1.2], limbScale: 0.65, spin: 1, flail: 0 },
-      tuck: { armL: [0.5, -1.7], armR: [0.5, -1.7], legL: [0.35, -1.2], legR: [0.35, -1.2], limbScale: 0.65, spin: 0, flail: 0 },
-      fall: { armL: [2.6, 0.5], armR: [2.3, 0.3], legL: [0.6, -0.7], legR: [0.3, -0.4], limbScale: 1, spin: 0, flail: 1 },
+      swing: { armL: [0.75, 0.9, 1, 1], armR: [2.95, 0.12, 1, 1], legL: [0.32, -0.95, 0.9, 0.8], legR: [0.08, -0.35, 0.95, 0.9], lean: 0.22, look: 0.8, spin: 0, flail: 0 },
+      glide: { armL: [1.75, 0.25, 1, 1], armR: [1.75, 0.25, 1, 1], legL: [0.42, 0.2, 1, 1], legR: [0.42, 0.2, 1, 1], lean: 0, look: 0, spin: 0, flail: 0 },
+      roll: { armL: [0.55, -2.1, 0.85, 0.9], armR: [0.55, -2.1, 0.85, 0.9], legL: [0.45, -2.5, 0.6, 0.85], legR: [0.45, -2.5, 0.6, 0.85], lean: 0, look: 0.3, spin: 1, flail: 0 },
+      tuck: { armL: [0.35, -1.9, 0.9, 0.9], armR: [0.35, -1.9, 0.9, 0.9], legL: [0.3, -2.6, 0.45, 0.95], legR: [0.3, -2.6, 0.45, 0.95], lean: -0.1, look: -0.5, spin: 0, flail: 0 },
+      fall: { armL: [2.5, 0.7, 1, 1], armR: [2.2, 0.5, 1, 1], legL: [0.6, -0.8, 1, 0.9], legR: [0.3, -0.4, 1, 1], lean: -0.15, look: -0.6, spin: 0, flail: 1 },
     },
     tricks: ['roll', 'tuck', 'glide'],
   },

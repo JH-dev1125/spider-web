@@ -80,7 +80,7 @@ function stubCtx() {
       return (...args) => {
         for (const a of args) if (typeof a === 'number') nums.push([k, a]);
         if (k === 'moveTo' || k === 'lineTo') pts.push(args);
-        return k === 'createLinearGradient' ? ctx : undefined;
+        return k.startsWith('create') ? ctx : undefined;
       };
     },
     set(o, k, v) { o[k] = v; return true; },
@@ -121,4 +121,30 @@ test('project rejects at camNear and matches drawFrame focal length', () => {
   assert.equal(project({ x: 0, y: 0, z: CFG.camNear }, c, W, H), null);
   const p = project({ x: 1, y: 0, z: 1 }, c, W, H); // tan(45deg) = 1 -> focal = H/2
   assert.ok(Math.abs(p.sx - (W / 2 + H / 2)) < 1e-9);
+});
+
+test('swing hand is raised toward the web side, finite for every pose', async () => {
+  const { characterHand } = await import('../src/character.js');
+  const out = { x: 0, y: 0 };
+  characterHand('swing', 100, 50, out); // a time jump snaps straight to the pose
+  assert.ok(out.x > 0 && out.y < -0.3 * CFG.character.minPx, `swing hand at ${out.x},${out.y}`);
+  for (const pose of ['glide', 'roll', 'tuck', 'fall', 'nope']) {
+    characterHand(pose, 200, 50, out);
+    assert.ok(Number.isFinite(out.x) && Number.isFinite(out.y), pose);
+  }
+});
+
+test('a tall face right beside the camera draws a bounded number of windows', async () => {
+  const { drawFrame } = await import('../src/render.js');
+  const p = createPlayer();
+  p.pos.x = CFG.corridorHalfWidth - 1; // hugging the right wall
+  const cam = makeCamera(p, null, 0);
+  const { ctx, pts } = stubCtx();
+  drawFrame(ctx, W, H, {
+    player: p, cam, pose: 'glide', t: 1, shake: 0, aim: null, missLine: null,
+    buildings: [{ side: 'R', z0: cam.z - 20, z1: cam.z + 400, h: CFG.ceiling }],
+  });
+  const quads = pts.length / 4;
+  assert.ok(quads > 200, `quads drawn: ${quads}`);
+  assert.ok(quads < CFG.render.gridColsMax * CFG.render.gridRowsMax, `too many: ${quads}`);
 });
