@@ -22,7 +22,8 @@ const inside = (p, s) => ['x', 'y', 'z'].every((k) => p[k] > s.min[k] && p[k] < 
 test('free flight: plain gravity plus a little quadratic drag', () => {
   const { p, ph } = setup({ vel: { x: 0, y: 0, z: 0 } });
   for (let i = 0; i < 60; i++) stepPhysics(ph, p, DT);
-  assert.ok(p.vel.y < -9.7 && p.vel.y > -9.81, `vy ${p.vel.y}`);
+  const vt = Math.sqrt(CFG.gravity / CFG.airDrag), vy = -vt * Math.tanh(CFG.gravity / vt); // falling from rest for 1 s
+  assert.ok(Math.abs(p.vel.y - vy) < 0.05 && p.vel.y > -CFG.gravity, `vy ${p.vel.y} vs ${vy}`);
   assert.ok(Math.abs(p.pos.y - (CFG.startHeight - 0.5 * CFG.gravity)) < 0.15);
 });
 
@@ -176,8 +177,12 @@ test('wall run: thrown sideways into a tower face he runs along it for ~wallRunS
   for (const f of run) {
     assert.equal(f.wall, -1);
     assert.ok(W - f.pos.x <= CFG.heroRadius + CFG.wallRunSkin + 1e-6, `left the face: ${W - f.pos.x}`);
-    assert.ok(f.vel.z >= log[r - 1].vel.z - 1e-6, `forward speed kept: ${f.vel.z}`);
   }
+  // friction: the run bleeds a little forward speed (about heroFriction * g per second), keeps most of it
+  for (let i = 1; i < run.length; i++) assert.ok(run[i].vel.z <= run[i - 1].vel.z + 1e-9, 'no speed gained on the wall');
+  const v0 = log[r - 1].vel.z, v1 = run.at(-1).vel.z;
+  assert.ok(v1 < v0 - 0.5 * CFG.heroFriction * CFG.gravity * CFG.wallRunSec, `no friction: ${v0} -> ${v1}`);
+  assert.ok(v1 > 0.85 * v0, `lost too much: ${v0} -> ${v1}`);
   const T = run.length * DT, sink = run[0].pos.y - run.at(-1).pos.y;
   assert.ok(sink < 0.5 * CFG.gravity * T * T, `sank ${sink.toFixed(2)} m in ${T.toFixed(2)} s`);
   assert.ok(sink < CFG.wallRunMaxSink * T + 0.5 * CFG.gravity * CFG.wallRunGravity * T * T + 0.05);
@@ -191,6 +196,15 @@ test('wall jump: away from the wall, upward, forward speed kept', () => {
   assert.ok(v.y > CFG.wallJump.up * 0.9, `vy ${v.y}`);
   assert.ok(v.z >= 20, `vz ${v.z}`);
   assert.ok(log.at(-1).pos.x < W - 3, 'flew off the wall');
+});
+
+test('friction: grazing a facade costs a little speed, and he never sticks to it', () => {
+  const vel = { x: CFG.wallRunMinSpeed * 0.8, y: 0, z: 20 }; // too slow into the face for a wall run
+  const graze = throwAtWall(vel), free = throwAtWall(vel, []);
+  assert.ok(!graze.log.some((f) => f.ev.includes('wallrun')));
+  const vz = graze.log.at(-1).vel.z, vzFree = free.log.at(-1).vel.z;
+  assert.ok(vz < vzFree - 0.05 && vz > 0.9 * vzFree, `grazed ${vz.toFixed(2)} vs ${vzFree.toFixed(2)} m/s`);
+  assert.ok(graze.log.at(-1).pos.z > 25, 'kept going along the wall');
 });
 
 test('wall run: a slow bump or a roof landing is no wall run', () => {

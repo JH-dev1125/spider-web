@@ -13,7 +13,7 @@
 //   web        { from, to, dist, travelled, hit } | null — a web in flight (from = the hand, to = target point).
 //   missLine   { to, age } | null — a web that hit nothing holdable, shown briefly.
 //              wall: the face's outward normal x while wall-running (-1 wall on the right, +1 on the left), else 0.
-//   pose       'swing' | 'glide' | 'roll' | 'tuck' | 'fall' | 'wallrun' | 'walljump';  t: seconds;  shake: camera shake amount.
+//   pose       'swing' | 'glide' | 'roll' | 'tuck' | 'fall' | 'wallrun' | 'run' (roof) | 'walljump';  t: seconds;  shake: camera shake amount.
 import { CFG } from './config.js';
 import { makeRng, createWorld, updateWorld } from './world.js';
 import { createPlayer, createPhysics, syncStructures, raycast, attach, release, stepPhysics, setZip } from './player.js';
@@ -103,6 +103,7 @@ export function stepGame(g, dt, actions) {
   g.trickSec = Math.max(0, g.trickSec - dt);
   if (!p.alive) g.pose = 'fall';
   else if (p.wall) g.pose = 'wallrun';
+  else if (p.roof) g.pose = 'run';
   else if (p.anchor) g.pose = 'swing';
   else if (g.trickSec === 0) g.pose = 'glide';
   if (g.missLine && (g.missLine.age += dt) > CFG.missShowSec) g.missLine = null;

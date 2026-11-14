@@ -205,7 +205,8 @@ test('camera: through swing ends, fast releases, zips and wall runs the hero sta
       fast = Math.max(fast, Math.hypot(f.p.vel.x, f.p.vel.y, f.p.vel.z));
     });
     ev.forEach((e) => seen.add(e));
-    assert.ok(fast > 30, `seed ${seed}: never fast (${fast.toFixed(1)} m/s)`);
+    // the slower tune peaks near 30 m/s without a zip (was 36)
+    assert.ok(fast > 26, `seed ${seed}: never fast (${fast.toFixed(1)} m/s)`);
   }
   for (const e of ['released', 'zipped', 'wallrun', 'walljump']) assert.ok(seen.has(e), `never saw ${e}`);
 });
@@ -218,10 +219,12 @@ test('camera on generated courses: always leashed, the hero framed >= 99.5% of f
   assert.ok(good / n >= 0.995, `${n - good} of ${n} frames off`);
 });
 
-test('wallrun pose strides with t (legs in opposite phase); walljump is a static tuck', () => {
+test('wallrun and roof run poses stride with t (legs in opposite phase); walljump is a static tuck', () => {
   const hip = (pose, t, j) => poseTarget(pose, t, false)[JOINTS.indexOf(j) * 3];
   const T = Math.PI / 2 / CFG.character.runFreq; // a quarter stride
-  assert.ok(hip('wallrun', T, 'hipL') - hip('wallrun', 0, 'hipL') > 0.5);
-  assert.ok(hip('wallrun', T, 'hipR') - hip('wallrun', 0, 'hipR') < -0.5);
+  for (const pose of ['wallrun', 'run']) {
+    assert.ok(hip(pose, T, 'hipL') - hip(pose, 0, 'hipL') > 0.5, pose);
+    assert.ok(hip(pose, T, 'hipR') - hip(pose, 0, 'hipR') < -0.5, pose);
+  }
   assert.equal(hip('walljump', 0, 'hipL'), hip('walljump', 1, 'hipL'));
 });

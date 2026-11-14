@@ -114,21 +114,29 @@ export function release(ph, p) {
 const copy = (v, o) => { o.x = v.x; o.y = v.y; o.z = v.z; };
 
 // Zip: on = start pulling toward the anchor (held Space / a hand pull), off = stop. Does nothing without a rope.
-// The pull is a force, so the hero is never moved by position; it ends by itself on release or past the anchor.
+// It starts with a snap (zipImpulse toward the anchor), then pulls as a force, so the hero is never moved by position;
+// it ends by itself on release or near the anchor.
 export function setZip(ph, on) {
   if (!on || !ph.rope) { ph.zip = null; return false; }
-  if (!ph.zip) ph.zip = { closing: false };
+  if (!ph.zip) {
+    ph.zip = { closing: false };
+    const d = ph.anchor.position.vsub(ph.hero.position), dist = d.length();
+    const closing = dist > 1e-6 ? d.dot(ph.hero.velocity) / dist : 0;
+    const kick = Math.min(CFG.zipImpulse, Math.max(0, CFG.zipMaxSpeed - closing)); // the snap, never past zipMaxSpeed
+    if (dist > 1e-6) ph.hero.velocity.vadd(d.scale(kick / dist), ph.hero.velocity);
+  }
   return true;
 }
 
-// Zip after a step: passed the anchor (at or beyond its z, within zipReleaseDist, or moving away once closing) = let go.
-// So a zip at an anchor already behind him just lets go.
+// Zip after a step: arrived = let go before passing the anchor: within zipReleaseDist of it, within half that of
+// drawing level with it along z (a high anchor he would pass beneath), or moving away once closing.
+// So a zip at an anchor already beside or behind him just lets go.
 function zipCheck(ph, p, events) {
   const { hero, anchor } = ph, z = ph.zip;
   const d = anchor.position.vsub(hero.position), dist = d.length();
   const closing = dist > 1e-6 ? d.dot(hero.velocity) / dist : 0;
   if (closing > 1) z.closing = true;
-  if (d.z <= 0 || dist < CFG.zipReleaseDist || (z.closing && closing <= 0)) {
+  if (dist < CFG.zipReleaseDist || d.z < CFG.zipReleaseDist / 2 || (z.closing && closing <= 0)) {
     release(ph, p); // the velocity is untouched: he flies on with all of it
     events.push('released', 'zipped');
   }
@@ -155,7 +163,9 @@ function wallStep(ph, p, v0, events) {
     const still = sideFace(ph, hero.position, CFG.wallRunSkin);
     if (w.sec < CFG.wallRunSec && still && still.n === w.n) {
       v.x = 0; // held on the face: no bounce, no drifting off
-      if (Math.abs(v.z) < Math.abs(w.fwd)) v.z = w.fwd; // keeps the run speed (drag is cancelled)
+      // the run speed replaces drag; the face's friction (mu * g) bleeds a little of it
+      w.fwd -= Math.sign(w.fwd) * Math.min(Math.abs(w.fwd), CFG.heroFriction * CFG.gravity * h);
+      if (Math.abs(v.z) < Math.abs(w.fwd)) v.z = w.fwd;
       return;
     }
     const J = CFG.wallJump, f = Math.sign(w.fwd) || 1;
@@ -176,7 +186,7 @@ function wallStep(ph, p, v0, events) {
 }
 
 // Advance by dt in fixed steps (leftover time carries to the next frame).
-// Events: 'bottom', 'bounce', 'dead', 'released' + 'zipped' (a zip passed its anchor), 'wallrun', 'walljump'.
+// Events: 'bottom', 'bounce', 'dead', 'released' + 'zipped' (a zip reached its anchor), 'wallrun', 'walljump'.
 export function stepPhysics(ph, p, dt) {
   const events = [];
   if (!p.alive) return events;
@@ -209,9 +219,8 @@ export function stepPhysics(ph, p, dt) {
       if (p.swingPhase === 'descending' && p.sawDescent && v.y > 0) { p.swingPhase = 'ascending'; events.push('bottom'); }
     }
     // standing on a roof with no rope: run forward so a landing never leaves the hero stuck
-    if (!ph.rope && hero.position.y > 1 && raycast(ph, hero.position, DOWN, CFG.heroRadius + 0.15)) {
-      v.z = Math.max(v.z, CFG.roofRunSpeed);
-    }
+    p.roof = !ph.rope && hero.position.y > 1 && !!raycast(ph, hero.position, DOWN, CFG.heroRadius + 0.15);
+    if (p.roof) v.z = Math.max(v.z, CFG.roofRunSpeed);
     if (hero.position.y <= CFG.heroRadius + 0.05) { // touching the street
       release(ph, p);
       ph.wall = null; p.wall = 0;

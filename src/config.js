@@ -11,8 +11,8 @@ export const CFG = deepFreeze({
   heroMass: 80,
   roofRunSpeed: 10, // m/s: landed on a roof without a rope, the hero runs forward and drops off the edge
   heroRadius: 0.5, // the hero's collision sphere
-  airDrag: 0.003, // 1/m: quadratic drag, a = airDrag * v^2 (0.5 rho Cd A / m); terminal speed sqrt(g / airDrag) = 57 m/s
-  heroFriction: 0, // the hero slides along facades instead of sticking
+  airDrag: 0.007, // 1/m: quadratic drag, a = airDrag * v^2; terminal speed sqrt(g / airDrag) = 37 m/s (was 0.003: too fast overall)
+  heroFriction: 0.05, // grazing a facade costs ~10% of the speed (was 0: walls felt like ice; 0.25 cost ~45% per graze)
   heroRestitution: 0.2,
   bounceMinSpeed: 4, // m/s impact speed along the contact normal that counts as a 'bounce' (camera shake)
   corridorHalfWidth: 14, // tower faces line x = +-14 (the street corridor)
@@ -26,17 +26,18 @@ export const CFG = deepFreeze({
   aimPitchDeg: { hi: 14, mid: 0, lo: -30 }, // from the centre: hi = 55.5 m web rising 13.4 m (was 25 deg: +25 m, out of view), mid 54 m level, lo 62 m dropping 31 m
   webRange: 135, // from beside one wall reaches the far wall
   webSpeed: 300, // m/s: a 54 m web lands in 0.18 s; a miss shows at full range after 0.45 s
-  reelSpeed: 8, // m/s the held rope shortens at full reel (a hand-over-hand pull; the constraint turns it into tension)
-  reelAccel: 6, // m/s^2 the reel spins up at once the rope is taut, so it never jerks the hero
+  reelSpeed: 6, // (was 8: the reel pumped speed too fast; 4 starved the bot of height) m/s the held rope shortens at full reel (a hand-over-hand pull; the constraint turns it into tension)
+  reelAccel: 4, // m/s^2 the reel spins up at once the rope is taut, so it never jerks the hero
   reelMinFactor: 0.5, // the reel stops at this fraction of the attach length
   minRopeLen: 3,
-  // zip (Space, or the hand pulled toward the body): a hard pull along the rope, auto-release past the anchor
+  // zip (Space, or the hand pulled toward the body): a snap then a hard pull along the rope, auto-release near the anchor
+  zipImpulse: 14, // m/s added toward the anchor the instant a zip starts: a snap, not a steady haul
   zipAccel: 45, // m/s^2 toward the anchor (~4.6 g)
   zipMaxSpeed: 55, // m/s: no more pull once closing this fast (stays under the 57 m/s no-tunnel test)
-  zipReleaseDist: 4, // m: closer than this to the anchor = passed, let go
+  zipReleaseDist: 7, // m: this close to the anchor (or half this short of its z) = arrived, let go before passing it
   // wall run: hitting a building's side face with speed toward it runs along it, then jumps off
-  wallRunMinSpeed: 4, // m/s into the face (before the hit) that starts a run; slower is a plain bump
-  wallRunSec: 0.4,
+  wallRunMinSpeed: 2.5, // m/s into the face (before the hit) that starts a run; slower is a plain bump
+  wallRunSec: 0.8, // long enough to see the stride (was 0.4)
   wallRunGravity: 0.15, // fraction of gravity while running
   wallRunMaxSink: 1, // m/s: a faster fall is cut to this when the run starts
   wallRunSkin: 0.15, // m: centre within heroRadius + this of the face counts as touching it
@@ -236,6 +237,7 @@ export const CFG = deepFreeze({
       roll: { spine: [-0.2, 0, 0.25], neck: [-0.3, 0, 0], shL: [-0.4, 0, 1.25], elL: [-0.7, 0, 0], shR: [-0.8, 0, 0.8], elR: [-1.2, 0, 0], hipL: [-0.7, 0, 0.3], knL: [1.1, 0, 0], hipR: [-0.1, 0, 0.15], knR: [0.35, 0, 0] },
       tuck: { spine: [-0.6, 0, 0], neck: [-0.4, 0, 0], shL: [-1.4, 0, 0.2], elL: [-1.6, 0, 0], shR: [-1.4, 0, 0.2], elR: [-1.6, 0, 0], hipL: [-2.3, 0, 0.1], knL: [2.5, 0, 0], hipR: [-2.3, 0, 0.1], knR: [2.5, 0, 0] },
       wallrun: { spine: [0.3, 0, 0], neck: [-0.35, 0, 0], shL: [-0.7, 0, 0.35], elL: [-1.3, 0, 0], shR: [0.1, 0, 1.7], elR: [-0.2, 0, 0], hipL: [-0.4, 0, 0.1], knL: [1.0, 0, 0], hipR: [0.3, 0, 0.1], knR: [0.8, 0, 0], run: 1 },
+      run: { spine: [0.35, 0, 0], neck: [-0.3, 0, 0], shL: [0.6, 0, 0.15], elL: [-1.3, 0, 0], shR: [-0.6, 0, 0.15], elR: [-1.3, 0, 0], hipL: [-0.4, 0, 0.05], knL: [1.0, 0, 0], hipR: [0.3, 0, 0.05], knR: [0.8, 0, 0], run: 1 },
       walljump: { spine: [-0.5, 0, 0], neck: [-0.4, 0, 0], shL: [-1.0, 0, 0.7], elL: [-1.4, 0, 0], shR: [-1.0, 0, 0.7], elR: [-1.4, 0, 0], hipL: [-1.7, 0, 0.15], knL: [2.2, 0, 0], hipR: [-1.2, 0, 0.15], knR: [1.7, 0, 0] },
       fall: { spine: [0.25, 0, 0], neck: [-0.5, 0, 0], shL: [0, 0, 2.5], elL: [-0.7, 0, 0], shR: [0.2, 0, 2.1], elR: [-0.5, 0, 0], hipL: [-0.5, 0, 0.35], knL: [1.1, 0, 0], hipR: [0.2, 0, 0.2], knR: [0.6, 0, 0], flail: 1 },
     },
