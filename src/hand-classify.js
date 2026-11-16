@@ -43,10 +43,16 @@ export const palmCenter = (lms) => {
   return { x: ids.reduce((a, i) => a + lms[i].x, 0) / 5, y: ids.reduce((a, i) => a + lms[i].y, 0) / 5 };
 };
 
+// Optional calibrated classifier (hand-calibrate.js makeOverride): (points, ruleGesture) -> gesture.
+// null = the angle rules alone. Module-level so every caller of classifyHand picks it up unchanged.
+let gestureOverride = null;
+export const setGestureOverride = (fn) => { gestureOverride = fn; };
+
 export function classifyHand(lms, handedness, { world, prev } = {}) {
   const c = palmCenter(lms);
   const bends = fingerBends(world ?? lms);
-  const gesture = gestureFromBends(bends, prev);
+  const rule = gestureFromBends(bends, prev);
+  const gesture = gestureOverride ? gestureOverride(world ?? lms, rule) : rule;
   const [hi, mid] = CFG.handLevelCuts;
   return { gesture, bends, side: c.x < CFG.handSideCuts[0] ? 'L' : c.x < CFG.handSideCuts[1] ? 'C' : 'R', level: c.y < hi ? 'hi' : c.y < mid ? 'mid' : 'lo' };
 }
@@ -99,7 +105,7 @@ export function createGestureGate(frames) {
 // would fight the level (wrist height) the user aims with. status.zip is true during the cooldown (HUD 당기기!).
 export function createHandController(tracker, { mode = 'shoot', onShot = () => {} } = {}) {
   let slots = []; // {wrist, gate, stable, cur: classification, prev, seen, charging, on, run, side}
-  const owner = { L: null, R: null }; // the hand holding each rope slot
+  const owner = { L: null, C: null, R: null }; // the hand holding each rope slot (C: the middle third, W: game.js gives it the free hand)
   let last = null, zipAt = -Infinity; // last = the hand that pressed most recently (shown in the HUD)
   const press = (s, t, side = s.cur.side) => {
     tracker.press(side, s.cur.level, t);
@@ -154,11 +160,11 @@ export function createHandController(tracker, { mode = 'shoot', onShot = () => {
       if (s === last) last = null;
       return false;
     });
-    for (const side of ['L', 'R']) { // tracker cleared under a held gesture: press again, same slot
+    for (const side of ['L', 'C', 'R']) { // tracker cleared under a held gesture: press again, same slot
       const s = owner[side];
       if (s && !tracker.state(t, side)) press(s, t, side);
     }
-    const shown = (last && owns(last) ? last : owner.L || owner.R) || slots[0];
+    const shown = (last && owns(last) ? last : owner.L || owner.R || owner.C) || slots[0];
     return {
       hands: slots.length,
       gesture: !shown ? 'none' : shown.charging ? mode : shown.stable === mode ? 'none' : shown.stable,

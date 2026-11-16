@@ -11,7 +11,7 @@ registerHooks({
   resolve: (spec, ctx, next) => (spec.startsWith('https://cdn.jsdelivr.net/')
     ? { url: `data:text/javascript,${encodeURIComponent(FAKE)}`, shortCircuit: true } : next(spec, ctx)),
 });
-const { startHand } = await import('../src/hand.js');
+const { startHand, openCamera } = await import('../src/hand.js');
 
 // Browser stand-ins: manual rAF queue, fake camera stream and video.
 let rafQ = [];
@@ -83,4 +83,61 @@ test('startHand rejects without getUserMedia', async () => {
   const env = setup(shootFrame);
   Object.defineProperty(globalThis, 'navigator', { configurable: true, value: {} });
   await assert.rejects(env.start());
+});
+
+// Fake camera that only offers `max` width; asks above it fail like Chrome does.
+function fakeDevices(max, { deny = false, caps = {} } = {}) {
+  const asked = [], applied = [];
+  const err = (name) => Object.assign(new Error(name), { name });
+  return { asked, applied, md: { getUserMedia: async (c) => {
+    asked.push(c.video);
+    if (deny) throw err('NotAllowedError');
+    const w = c.video.width?.min ?? 0;
+    if (w > max) throw err('OverconstrainedError');
+    const track = { label: 'Fake cam', stop() {}, getCapabilities: () => caps,
+      applyConstraints: async (x) => { applied.push(x); }, getSettings: () => ({ width: c.video.width?.ideal ?? max, height: 0, frameRate: 30 }) };
+    return { getTracks: () => [track], getVideoTracks: () => [track] };
+  } } };
+}
+
+test('openCamera: asks 1280x720@60 front camera without browser crop first', async () => {
+  const f = fakeDevices(1920, { caps: { exposureMode: ['manual', 'continuous'] } });
+  const { settings } = await openCamera(f.md);
+  assert.equal(f.asked.length, 1);
+  assert.deepEqual(f.asked[0].width, { min: 1280, ideal: 1280 });
+  assert.equal(f.asked[0].facingMode, 'user');
+  assert.deepEqual(f.asked[0].frameRate, { ideal: 60 });
+  assert.deepEqual(f.asked[0].resizeMode, { ideal: 'none' });
+  assert.equal(settings.width, 1280);
+  assert.equal(settings.label, 'Fake cam');
+  assert.deepEqual(f.applied, [{ advanced: [{ exposureMode: 'continuous' }] }]);
+});
+
+test('openCamera: falls back 1280 -> 960 -> 640 -> anything', async () => {
+  let f = fakeDevices(1000);
+  assert.equal((await openCamera(f.md)).settings.width, 960);
+  assert.deepEqual(f.asked.map((v) => v.width.min), [1280, 960]);
+  f = fakeDevices(320);
+  await openCamera(f.md);
+  assert.deepEqual(f.asked.map((v) => v.width?.min), [1280, 960, 640, undefined]);
+  assert.equal(f.applied.length, 0, 'no exposure hint without the capability');
+});
+
+test('openCamera: a denied permission is not retried down the ladder', async () => {
+  const f = fakeDevices(1920, { deny: true });
+  await assert.rejects(openCamera(f.md), { name: 'NotAllowedError' });
+  assert.equal(f.asked.length, 1);
+});
+
+test('startHand: reports camera settings, smoothed hands with raw and quality, and latency stats', async () => {
+  const env = setup(shootFrame);
+  let got;
+  const handle = await startHand(env.video, env.tracker, () => env.t, { onFrame: (st, hands, stats) => { got = { hands, stats }; } });
+  for (let k = 0; k < 3; k++) env.frame();
+  assert.equal(got.stats, handle.stats);
+  assert.equal(got.stats.delegate, 'GPU');
+  assert.ok(got.stats.frameMs >= 0 && got.stats.detectMs >= 0 && got.stats.actionMs >= 0, 'pressed: action latency measured');
+  assert.equal(got.hands[0].raw.length, 21);
+  assert.ok(['good', 'fair', 'poor'].includes(got.stats.quality));
+  handle.stop();
 });

@@ -15,6 +15,8 @@
   #grid .aim { background: rgba(255,213,74,.45); }
   #info { font-size: 40px; font-weight: bold; line-height: 1.4; }
   #hands { font: 18px ui-monospace, monospace; margin-top: 12px; }
+  #stats { font: 15px ui-monospace, monospace; margin-top: 12px; color: #9f9; white-space: pre; }
+  #view { outline: 4px solid #ff5c5c; }
   #err { color: #ff7a7a; font-size: 24px; }
   button { font-size: 20px; margin-top: 16px; }
 </style>
@@ -25,16 +27,21 @@
   <div id="info">카메라 준비 중…</div>
   <div id="err"></div>
   <div id="hands"></div>
+  <div id="stats"></div>
   <button id="mode">모드: shoot (검지·새끼)</button>
   <p>bend: 0 = 곧게 폄, 130 = 손바닥까지 접음. 발사 = 검지·새끼 &lt; 60 이고 중지·약지 &gt; 40,
   손바닥 = 넷 다 &lt; 30 (src/config.js 의 hand*Deg).<br>
   label Left = 사용자의 오른손 (원본 카메라 기준이라 뒤바뀜). score &lt; 0.8 이면 화면 절반으로 방향 결정.<br>
+  점: 회색 = 원본, 파랑 = One Euro 필터. 보정: 게임 타이틀에서 K (같은 localStorage).<br>
   충전 제스처를 유지하면 노란 칸에 조준, 풀면 발사.<br>마지막 발사: <span id="last">-</span></p>
 </div>
 <script type="module">
 import { startHand } from '../src/hand.js';
 import { createChargeTracker } from '../src/input-core.js';
 import { classifyHand, fingerBends } from '../src/hand-classify.js';
+import { loadTemplates, createClassifier, handFeatures } from '../src/hand-calibrate.js';
+const templates = loadTemplates(localStorage);
+const knn = templates && createClassifier(templates);
 
 const $ = (id) => document.getElementById(id);
 const cells = {};
@@ -44,10 +51,20 @@ const tracker = createChargeTracker();
 const now = () => performance.now() / 1000;
 let mode = 'shoot';
 
-function onFrame(st, hands) {
+const COLOR = { good: '#3ddc84', fair: '#ffd54a', poor: '#ff5c5c', none: '#ff5c5c' };
+const f1 = (v) => (v == null ? '-' : v.toFixed(1));
+function onFrame(st, hands, s) {
   dots.clearRect(0, 0, 640, 480);
+  dots.fillStyle = 'rgba(200,200,200,.7)';
+  for (const h of hands) for (const p of h.raw ?? []) dots.fillRect(p.x * 640 - 2, p.y * 480 - 2, 4, 4); // already mirrored
   dots.fillStyle = '#4af';
-  for (const h of hands) for (const p of h.landmarks) dots.fillRect(p.x * 640 - 3, p.y * 480 - 3, 6, 6); // already mirrored
+  for (const h of hands) for (const p of h.landmarks) dots.fillRect(p.x * 640 - 3, p.y * 480 - 3, 6, 6);
+  $('view').style.outlineColor = COLOR[s.quality];
+  const c = s.camera;
+  $('stats').textContent = `camera ${c.width}x${c.height} @ ${f1(c.frameRate)} fps (measured ${f1(s.fps)}), resize ${c.resizeMode ?? '-'}\n${c.label}\n`
+    + `model input ${s.input.w}x${s.input.h} on ${s.delegate} · detect ${f1(s.detectMs)} ms\n`
+    + `capture → hands ${f1(s.frameMs)} ms · capture → last action ${f1(s.actionMs)} ms\n`
+    + `quality ${s.quality}${s.edge ? ' · 가장자리!' : ''}${s.dark ? ' · 너무 어두움!' : ''}`;
   const aim = tracker.state(now());
   for (const [k, el] of Object.entries(cells)) el.className = aim && k === aim.side + aim.level ? 'aim' : k === st.side + st.level ? 'now' : '';
   $('info').innerHTML = `손 ${st.hands}개<br>gesture: ${st.gesture}<br>side (미리보기 절반): ${st.side ?? '-'} · level: ${st.level ?? '-'}<br>heldSec: ${aim ? aim.heldSec.toFixed(2) : '-'}`;
@@ -56,7 +73,10 @@ function onFrame(st, hands) {
     const c = classifyHand(h.landmarks, h.handedness, { world: h.world });
     const b = fingerBends(h.world ?? h.landmarks).map((d) => d.toFixed(0).padStart(3, ' '));
     return `${c.gesture} · ${c.side} · ${c.level} · label ${h.handedness?.categoryName ?? '-'} ${h.handedness?.score?.toFixed(2) ?? ''}`
-      + `<br>bend 검지 ${b[0]} 중지 ${b[1]} 약지 ${b[2]} 새끼 ${b[3]}`;
+      + `<br>bend 검지 ${b[0]} 중지 ${b[1]} 약지 ${b[2]} 새끼 ${b[3]}`
+      + (knn ? (() => { const r = knn(handFeatures(h.world ?? h.landmarks));
+        return `<br>보정 k-NN: ${r.ood ? '모르는 자세 (규칙 사용)' : r.gesture} · ${Object.entries(r.probs).map(([g, p]) => `${g} ${p.toFixed(2)}`).join(' ')} · d ${r.dist.toFixed(2)}`; })()
+        : '<br>보정 없음 (규칙만)');
   }).join('<hr>');
 }
 const onShot = (a) => { $('last').textContent = a.type === 'press' ? `press ${a.side} ${a.level}` : a.type === 'zip' ? 'zip (당기기!)' : `release ${a.heldSec?.toFixed(2) ?? '-'}s`; };
