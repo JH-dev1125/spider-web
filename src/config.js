@@ -82,8 +82,7 @@ export const CFG = deepFreeze({
     landingLeadSec: 0.8,
     landingStiffSec: 0.18,
     landingSettleSec: 1,
-    landingRootInertia: 0.4, // kg m^2: the landing's root muscle scale (in contact the pelvis no longer turns the whole rig)
-    landingPelvisY: 0.45, // m: the hero landing holds the pelvis at kneeling height (one knee and one fist down)
+    landingPelvisY: 0.22, // m: the hero landing holds the pelvis at kneeling height (one knee and one fist down)
     strainForce: 2400, // N: full strain, using the solved rope equation multiplier
     weights: {
       corkscrew: 1, frontHalfTwist: 1, layoutBackflip: 1, swanDive: 1.2,

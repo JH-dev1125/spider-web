@@ -60,11 +60,9 @@ export function makeRagdoll(world, p, material, footMaterial) {
       world.addConstraint(joint); joints.push({ a, parent, body: b, joint, motor: motorOn(world, parent, b) });
     }
   }
-  // the whole rig's inertia about the pelvis (smallest principal axis, roughly): the root muscle's scale
-  const rootInertia = Object.values(bodies).reduce((s, b) => s + minInertia(b) + b.mass * b.position.distanceSquared(bodies.pelvis.position), 0) / 2;
   // the root muscle: the pelvis's world orientation against a static frame (the upright reference)
   const frame = new C.Body({ mass: 0, collisionFilterGroup: 0, collisionFilterMask: 0 }); world.addBody(frame);
-  return { bodies, joints, rootInertia, root: motorOn(world, frame, bodies.pelvis), targets: Object.fromEntries(ANATOMY.map(a => [a.name, new C.Quaternion()])), time: 0 };
+  return { bodies, joints, root: motorOn(world, frame, bodies.pelvis), targets: Object.fromEntries(ANATOMY.map(a => [a.name, new C.Quaternion()])), time: 0 };
 }
 
 // Muscles are VELOCITY SERVOS solved inside the constraint solver (three RotationalMotorEquations per joint, one per

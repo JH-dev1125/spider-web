@@ -41,10 +41,10 @@ const strain = pose({ chest: [.32, 0, 0], head: [.45, 0, 0],
   upperArmL: [-2.8, 0, -.08], upperArmR: [-2.82, 0, .08],
   forearmL: [-.06, 0, 0], forearmR: [-.04, 0, 0],
   thighL: [-.6, 0, -.08], thighR: [-.6, 0, .08], shinL: [.95, 0, 0], shinR: [.95, 0, 0] });
-const landingJoints = { chest: [.43, 0, 0], head: [.12, 0, 0],
-  upperArmL: [-.43, 0, 0], forearmL: [-.05, 0, 0],
+const landingJoints = { pelvis: [.08, 0, 0], chest: [.44, 0, 0], head: [.0, 0, 0],
+  upperArmL: [-.54, 0, -.06], forearmL: [0, 0, 0], handL: [.45, 0, 0],
   upperArmR: [.6, 0, 1], forearmR: [-.65, 0, 0],
-  thighL: [1.08, 0, 0], shinL: [1.05, 0, 0], footL: [-.55, 0, 0],
+  thighL: [.9, 0, 0], shinL: [1.2, 0, 0], footL: [-.55, 0, 0],
   thighR: [-1.89, 0, 0], shinR: [2.5, 0, 0], footR: [-.61, 0, 0] };
 
 function move(name, frames, options = {}) {

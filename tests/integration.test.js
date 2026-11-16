@@ -100,17 +100,36 @@ test('two-hand grip: on the rope both hands hold the line (within 0.25 m of it a
   assert.ok(near / checked > 0.95, `the hands within 0.25 m of the line on only ${(100 * near / checked).toFixed(1)}% of frames`);
 });
 
-test('hero landing: street contact starts the landing, muscles stay on, he comes to rest low with no NaN', () => {
-  const g = createGame(2);
-  let ev = [];
-  for (let i = 0; i < 600 && g.player.alive; i++) ev = stepGame(g, DT, []);
-  assert.ok(ev.includes('dead') && ev.includes('landingImpact'));
-  assert.equal(g.phys.motion.move, MOVES.landing);
-  for (let i = 0; i < 60 * 2; i++) stepGame(g, DT, []);
-  assert.ok(g.phys.landing.sec >= CFG.moves.landingSettleSec);
-  assert.ok(bodies(g).every((b) => b.velocity.length() < 1.5), 'settled');
-  assert.ok(bodies(g).every((b) => b.position.y > 0), 'nothing through the street');
-  assert.ok(g.phys.rag.bodies.pelvis.position.y > 0.3, 'held up off the street, not folded flat');
+// The classic superhero landing: ONE knee down (the other leg bent, its foot planted), one fist on the street, the other
+// arm back and out, the torso within 35 deg of upright. Muscles stay on; no NaN; held, not folded flat.
+test('hero landing: one knee and one fist on the street, the other foot planted, the other arm up, torso <= 35 deg (8 deaths)', () => {
+  const lowest = (body) => {
+    const h = body.shapes[0].halfExtents;
+    let m = Infinity;
+    for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) m = Math.min(m, body.pointToWorldFrame({ x: x * h.x, y: y * h.y, z: z * h.z }).y);
+    return m;
+  };
+  for (let seed = 1; seed <= 8; seed++) {
+    const g = createGame(seed), bot = createBot();
+    for (let i = 0; i < 60 * (3 + seed % 4) && g.player.alive; i++) stepGame(g, DT, bot(g, DT)); // swing a while..
+    stepGame(g, DT, [{ type: 'release' }]);
+    let ev = [];
+    for (let i = 0; i < 1800 && g.player.alive; i++) ev = stepGame(g, DT, []); // ..then let go and fall
+    assert.ok(ev.includes('dead') && ev.includes('landingImpact'), `seed ${seed}`);
+    assert.equal(g.phys.motion.move, MOVES.landing);
+    for (let i = 0; i < 60 * (CFG.moves.landingSettleSec + 0.5); i++) stepGame(g, DT, []);
+    const b = g.phys.rag.bodies, at = `seed ${seed}`;
+    assert.ok(bodies(g).every((x) => x.velocity.length() < 1.5), `${at}: settled`);
+    assert.ok(bodies(g).every((x) => [x.position.x, x.position.y, x.position.z].every(Number.isFinite) && x.position.y > 0), `${at}: nothing through the street`);
+    assert.ok(lowest(b.shinL) < 0.04, `${at}: the left knee is down (${lowest(b.shinL).toFixed(2)} m)`);
+    assert.ok(lowest(b.handL) < 0.04, `${at}: the left fist is on the street (${lowest(b.handL).toFixed(2)} m)`);
+    assert.ok(lowest(b.footR) < 0.04, `${at}: the right foot is planted`);
+    assert.ok(b.shinR.pointToWorldFrame({ x: 0, y: .195, z: 0 }).y > 0.2, `${at}: the right knee is up (one knee only)`);
+    assert.ok(lowest(b.handR) > 0.2, `${at}: the right arm is back and out, off the street`);
+    const up = b.chest.quaternion.vmult({ x: 0, y: 1, z: 0 }), torso = Math.acos(Math.min(1, up.y)) * 180 / Math.PI;
+    assert.ok(torso <= 35, `${at}: torso ${torso.toFixed(0)} deg from upright`);
+    assert.ok(b.pelvis.position.y > 0.25, `${at}: held up off the street, not folded flat`);
+  }
 });
 
 test('CFG.heroMass is the ragdoll: the ANATOMY masses sum to it (70 kg)', async () => {
