@@ -227,7 +227,7 @@ export function createRenderer(canvas) {
   skyline.count = R.skylineCount;
   skylineInfo.needsUpdate = true;
 
-  function describe(s, close) {
+  function describe(s, close, detailZ, detailY) {
     const { min: a, max: b, kind } = s;
     const prefix = s.id.split(':')[0];
     let seed = 0; for (const c of prefix) seed = (seed * 31 + c.charCodeAt(0)) | 0;
@@ -286,14 +286,45 @@ export function createRenderer(canvas) {
       // Thin cornices, masonry sills, and stacked balconies break up the wall silhouette.
       for (const yy of [a.y, b.y - 0.45]) add('trim', x, yy, z, dx + 0.5, 0.45, dz + 0.5);
       const style = Math.floor(h(2) * 3);
-      // Keep distant facades legible without spending triangles on every small sill.
-      for (let yy = a.y + 3; yy < b.y - 1; yy += close ? 3 : 6) {
-        if (style === 2) add('steel', face + sd * 0.07, yy, z, 0.14, 0.09, dz);
-        else for (let zz = a.z + 1.25; zz < b.z - 1; zz += close ? 2.5 : 5) {
-          add('trim', face + sd * 0.15, yy, -zz, 0.35, 0.12, 1.7);
-          if (style === 1 && Math.floor((zz - a.z) / 2.5) % 4 === 1 && yy % 9 < 3) {
-            add('trim', face + sd * 0.3, yy - 0.12, -zz, 0.7, 0.16, 2.1);
-            add('steel', face + sd * 0.65, yy, -zz, 0.08, 0.65, 2.1);
+      // Near LOD: glass lies at the solid face, recessed behind masonry reveals and metal frames.
+      // Far LOD keeps the same window shader and silhouette bands.
+      for (let yy = a.y + 3; yy < b.y - 1; yy += 6) add('trim', face + sd * .08, yy, z, .18, .12, dz);
+      for (let zz = a.z + 1; zz < b.z; zz += 7.5) add('trim', face + sd * .1, a.y, -zz, .23, dy, .22);
+      if (close) {
+        const seed = h(3) * .99, oy = seed * 40, oz = seed * 136;
+        const [ww, wh] = R.windowStyles[style];
+        const gw = ww * 2.5, gh = wh * 3;
+        for (let row = Math.ceil(Math.max(a.y + 1, detailY - 18) / 3 + oy); (row + .5 - oy) * 3 < Math.min(b.y - 1, detailY + 21); row++) {
+          const cy = (row + .5 - oy) * 3;
+          for (let col = Math.floor(-Math.min(b.z, detailZ + 45) / 2.5 + oz); (col + .5 - oz) * 2.5 < -Math.max(a.z, detailZ - 45); col++) {
+            const cz = (col + .5 - oz) * 2.5;
+            if (cz < -b.z + 1 || cz > -a.z - 1) continue;
+            for (const edge of [-1, 1]) {
+              add('trim', face + sd * .08, cy - gh / 2 - .06, cz + edge * (gw / 2 + .06), .22, gh + .12, .12);
+              add('trim', face + sd * .08, cy + edge * gh / 2 - .06, cz, .24, .12, gw + .12);
+            }
+            add('steel', face + sd * .035, cy - gh / 2, cz, .055, gh, .045);
+            add('steel', face + sd * .035, cy, cz, .055, .04, gw);
+            add('trim', face + sd * .16, cy - gh / 2 - .12, cz, .38, .12, gw + .28);
+          }
+        }
+        if (style === 0) {
+          // Brick tenements: projecting fire-escape landings, rails and alternating diagonal stair flights.
+          const ez = -Math.max(a.z + 3, Math.min(b.z - 3, (a.z + b.z) / 2));
+          for (let yy = Math.max(a.y + 6, Math.floor((detailY - 18) / 3) * 3); yy < Math.min(b.y, detailY + 21); yy += 3) {
+            add('steel', face + sd * .65, yy, ez, 1.3, .1, 3.2);
+            for (const zz of [ez - 1.55, ez + 1.55]) add('steel', face + sd * 1.25, yy, zz, .055, .95, .055);
+            add('steel', face + sd * 1.25, yy + .9, ez, .06, .06, 3.2);
+            for (let j = 0; j < 9; j++) add('steel', face + sd * .7, yy - 3 + j / 3, ez - 1.25 + j * .28, .9, .06, .28);
+            beam('steel', face + sd * 1.15, yy - 2.1, ez - 1.25, face + sd * 1.15, yy + .9, ez + 1.25, .055);
+          }
+        } else if (style === 1) {
+          for (let yy = Math.max(a.y + 6, Math.floor((detailY - 18) / 6) * 6); yy < Math.min(b.y, detailY + 21); yy += 6) {
+            for (let zz = a.z + 4; zz < b.z - 3; zz += 10) {
+              add('trim', face + sd * .45, yy, -zz, .9, .16, 2.7);
+              add('steel', face + sd * .85, yy + .16, -zz, .06, .8, 2.7);
+              for (const edge of [-1, 1]) add('steel', face + sd * .45, yy + .16, -zz + edge * 1.3, .9, .8, .06);
+            }
           }
         }
       }
@@ -322,16 +353,17 @@ export function createRenderer(canvas) {
   }
   let upperIds = new Set();
   const listHasUpper = s => s.kind === 'tower' && upperIds.has(s.id.split(':')[0]);
-  function syncStructures(list, heroZ) {
+  function syncStructures(list, heroZ, heroY) {
+    const detailZ = Math.floor(heroZ / 20) * 20, detailY = Math.floor(heroY / 12) * 12;
     const ids = new Set(list.map(s => s.id));
     let changed = false;
     for (const id of records.keys()) if (!ids.has(id)) { records.delete(id); changed = true; }
     upperIds = new Set(list.filter(s => s.kind === 'setback').map(s => s.id.split(':')[0]));
     for (const s of list) {
-      const close = s.max.z > heroZ - 20 && s.min.z < heroZ + 100;
-      const signature = `${s.kind}|${s.min.x},${s.min.y},${s.min.z}|${s.max.x},${s.max.y},${s.max.z}|${s.attach}|${listHasUpper(s)}|${close}`;
+      const close = s.max.z > heroZ - 20 && s.min.z < heroZ + 65;
+      const signature = `${s.kind}|${s.min.x},${s.min.y},${s.min.z}|${s.max.x},${s.max.y},${s.max.z}|${s.attach}|${listHasUpper(s)}|${close}|${close ? detailZ + "," + detailY : ""}`;
       if (records.get(s.id)?.signature === signature) continue;
-      records.set(s.id, { signature, parts: describe(s, close) }); changed = true;
+      records.set(s.id, { signature, parts: describe(s, close, detailZ, detailY) }); changed = true;
     }
     if (!changed) return;
     const all = { solid: [], trim: [], steel: [], yellow: [], tank: [], roof: [] };
@@ -464,7 +496,7 @@ export function createRenderer(canvas) {
   let fpsAvg = 60;
 
   let cam = null;
-  const vPos = new THREE.Vector3(), vVel = new THREE.Vector3(), vAnchor = new THREE.Vector3(), vAim = new THREE.Vector3(), vHand = new THREE.Vector3();
+  const vAnchor = new THREE.Vector3(), vHand = new THREE.Vector3();
 
   function render(view, dt) {
     const p = view.player;
@@ -478,7 +510,7 @@ export function createRenderer(canvas) {
     sky.position.copy(camera.position);
     street.position.set(camera.position.x, 0, camera.position.z);
 
-    syncStructures(view.structures, p.pos.z);
+    syncStructures(view.structures, p.pos.z, p.pos.y);
     for (let i = 0; i < SKY.length; i++) {
       const s = SKY[i];
       setST(skyline, i, s.x, 0, -wrapZ(s.z, cam.z, R.skylineBack, R.skylineSpan), s.w, s.h, s.d);
@@ -487,10 +519,8 @@ export function createRenderer(canvas) {
     syncStreet(cam.z, view.t);
 
     // hero first: the rope, web and miss line leave its hand
-    set3(vPos, p.pos); set3(vVel, p.vel);
     const anchor = p.anchor ? set3(vAnchor, p.anchor) : null;
-    const aimAt = web ? set3(vAim, web.to) : view.missLine ? set3(vAim, view.missLine.to) : null;
-    hero.update(view.pose, view.t, dt, vPos, vVel, anchor, aimAt, vHand, p.wall || (view.pose === 'wallrun' ? -1 : 0)); // ?debugPose=wallrun: a right wall
+    hero.update(p, vHand, web?.side);
 
     rope.visible = splat.visible = !!anchor;
     const key = p.anchor ? `${p.anchor.x},${p.anchor.y},${p.anchor.z}` : '';
@@ -546,6 +576,10 @@ export function createRenderer(canvas) {
       statsEl.textContent = `calls ${gl.info.render.calls}  tris ${gl.info.render.triangles}  fps ${fpsAvg.toFixed(0)}`;
       statsEl.dataset.calls = gl.info.render.calls;
       statsEl.dataset.triangles = gl.info.render.triangles;
+      statsEl.dataset.pose = view.pose;
+      statsEl.dataset.wall = p.wall;
+      statsEl.dataset.skin = hero.root.isSkinnedMesh;
+      statsEl.dataset.bones = hero.skeleton.bones.length;
     }
   }
 

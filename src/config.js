@@ -8,9 +8,8 @@ export const CFG = deepFreeze({
   // physics: cannon-es (vendor/cannon-es.js), SI units (m, s, kg)
   physicsStep: 1 / 120, // fixed step: each frame runs whole steps off an accumulator, so a dt sequence replays exactly
   gravity: 9.81,
-  heroMass: 80,
-  roofRunSpeed: 10, // m/s: landed on a roof without a rope, the hero runs forward and drops off the edge
-  heroRadius: 0.5, // the hero's collision sphere
+  heroMass: 70,
+  roofRunSpeed: 3, // m/s: landed on a roof without a rope, the hero runs forward and drops off the edge
   airDrag: 0.007, // 1/m: quadratic drag, a = airDrag * v^2; terminal speed sqrt(g / airDrag) = 37 m/s (was 0.003: too fast overall)
   heroFriction: 0.05, // grazing a facade costs ~10% of the speed (was 0: walls felt like ice; 0.25 cost ~45% per graze)
   heroRestitution: 0.2,
@@ -37,10 +36,8 @@ export const CFG = deepFreeze({
   zipReleaseDist: 7, // m: this close to the anchor (or half this short of its z) = arrived, let go before passing it
   // wall run: hitting a building's side face with speed toward it runs along it, then jumps off
   wallRunMinSpeed: 2.5, // m/s into the face (before the hit) that starts a run; slower is a plain bump
-  wallRunSec: 0.8, // long enough to see the stride (was 0.4)
+  wallRunSec: 2.2, // seconds, including the physical turn onto the facade
   wallRunGravity: 0.15, // fraction of gravity while running
-  wallRunMaxSink: 1, // m/s: a faster fall is cut to this when the run starts
-  wallRunSkin: 0.15, // m: centre within heroRadius + this of the face counts as touching it
   wallRunCooldownSec: 0.6, // no new run this long after a wall jump
   wallJump: { out: 9, up: 6, fwd: 3 }, // m/s added at the end of a run: away from the wall, up, along the run
   ropeMaxForce: 1e5, // N, the rope's tension limit (an 80 kg hero at 40 m/s on a 30 m rope needs ~5 kN)
@@ -131,7 +128,7 @@ export const CFG = deepFreeze({
     lookUp: 0, // m above the hero the look point sits (higher puts him low in the frame)
     lookMaxSide: 1.2, // m: cap on the look point's lead sideways and up/down
     camWallGap: 1.5, // m: at the corridor face the camera sits this far toward the street from the hero
-    camBoxMargin: 0.3, // m: the camera never gets closer than this to a structure box (< heroRadius: a hero on a wall fits)
+    camBoxMargin: 0.3, // m: the camera never gets closer than this to a structure box
     camSnap: 80, // m: a bigger jump (restart) snaps the camera instead of easing
     fovMin: 60, // a normal lens: anchors ~52 m ahead are already in view looking forward
     fovMax: 68, // only a slight widening with speed; more reads as fisheye distortion
@@ -171,7 +168,6 @@ export const CFG = deepFreeze({
     ropeRadiusPerM: 0.0012,
     ropeMaxRadius: 0.16,
     splatSize: 1.8,
-    playerHand: 0.9, // game.js casts from here; the drawn rope leaves the rig's hand instead
     // speed feel
     speedLineStart: 1.3, // * baseSpeed
     speedLineFull: 2.4,
@@ -223,27 +219,8 @@ export const CFG = deepFreeze({
   },
   character: {
     height: 1.85, // metres; long-legged athletic rig, pelvis at player.pos
-    blendRate: 12, // 1/s, pose-to-pose easing
-    turnRate: 8, // 1/s, body orientation easing
-    flailSpeed: 14,
-    flailAmp: 0.5,
-    blue: '#1d2f8a',
-    // Joint Euler angles [x, y, z] in radians. Limbs hang down (-y) at rest; +x swings a limb backward,
-    // +z raises a right limb sideways. Left joints use the mirrored sign, so symmetric poses read alike.
-    // Swing is authored with the web in the right hand; character.js mirrors it for a left anchor.
-    poses: {
-      swing: { spine: [0.15, 0, 0], neck: [-0.25, 0, 0], shL: [0.35, 0, 0.55], elL: [-0.9, 0, 0], shR: [0, 0, 2.9], elR: [0, 0, 0], hipL: [0.55, 0, 0.12], knL: [1.0, 0, 0], hipR: [0.15, 0, 0.06], knR: [0.35, 0, 0] },
-      glide: { spine: [-0.1, 0, 0], neck: [-0.7, 0, 0], shL: [-0.2, 0, 1.55], elL: [-0.25, 0, 0], shR: [-0.2, 0, 1.55], elR: [-0.25, 0, 0], hipL: [0.1, 0, 0.5], knL: [0.25, 0, 0], hipR: [0.1, 0, 0.5], knR: [0.25, 0, 0] },
-      roll: { spine: [-0.2, 0, 0.25], neck: [-0.3, 0, 0], shL: [-0.4, 0, 1.25], elL: [-0.7, 0, 0], shR: [-0.8, 0, 0.8], elR: [-1.2, 0, 0], hipL: [-0.7, 0, 0.3], knL: [1.1, 0, 0], hipR: [-0.1, 0, 0.15], knR: [0.35, 0, 0] },
-      tuck: { spine: [-0.6, 0, 0], neck: [-0.4, 0, 0], shL: [-1.4, 0, 0.2], elL: [-1.6, 0, 0], shR: [-1.4, 0, 0.2], elR: [-1.6, 0, 0], hipL: [-2.3, 0, 0.1], knL: [2.5, 0, 0], hipR: [-2.3, 0, 0.1], knR: [2.5, 0, 0] },
-      wallrun: { spine: [0.3, 0, 0], neck: [-0.35, 0, 0], shL: [-0.7, 0, 0.35], elL: [-1.3, 0, 0], shR: [0.1, 0, 1.7], elR: [-0.2, 0, 0], hipL: [-0.4, 0, 0.1], knL: [1.0, 0, 0], hipR: [0.3, 0, 0.1], knR: [0.8, 0, 0], run: 1 },
-      run: { spine: [0.35, 0, 0], neck: [-0.3, 0, 0], shL: [0.6, 0, 0.15], elL: [-1.3, 0, 0], shR: [-0.6, 0, 0.15], elR: [-1.3, 0, 0], hipL: [-0.4, 0, 0.05], knL: [1.0, 0, 0], hipR: [0.3, 0, 0.05], knR: [0.8, 0, 0], run: 1 },
-      walljump: { spine: [-0.5, 0, 0], neck: [-0.4, 0, 0], shL: [-1.0, 0, 0.7], elL: [-1.4, 0, 0], shR: [-1.0, 0, 0.7], elR: [-1.4, 0, 0], hipL: [-1.7, 0, 0.15], knL: [2.2, 0, 0], hipR: [-1.2, 0, 0.15], knR: [1.7, 0, 0] },
-      fall: { spine: [0.25, 0, 0], neck: [-0.5, 0, 0], shL: [0, 0, 2.5], elL: [-0.7, 0, 0], shR: [0.2, 0, 2.1], elR: [-0.5, 0, 0], hipL: [-0.5, 0, 0.35], knL: [1.1, 0, 0], hipR: [0.2, 0, 0.2], knR: [0.6, 0, 0], flail: 1 },
-    },
+    blue: '#183a7a',
     tricks: ['roll', 'tuck', 'glide'],
-    runFreq: 16, // rad/s of the wall-run stride
-    runAmp: 0.7, // rad hip swing of the stride
   },
   keys: {
     KeyQ: ['L', 'hi'], KeyA: ['L', 'mid'], KeyZ: ['L', 'lo'],

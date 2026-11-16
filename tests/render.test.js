@@ -1,9 +1,10 @@
-// render.js needs three.js + WebGL; these cover its pure helpers (render-math.js, character.js pose math).
+// render.js needs three.js + WebGL; these cover its pure helpers (render-math.js, character.js skin generation).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG } from '../src/config.js';
 import { followCamera, speedK, shakeOffset, speedLineK, wrapZ, surfaceNormal } from '../src/render-math.js';
-import { poseTarget, blendPose, flipAngle, JOINTS } from '../src/character.js';
+import { skinSurface } from '../src/character.js';
+import { ANATOMY } from '../src/ragdoll.js';
 import { createPlayer } from '../src/player.js';
 import { createGame, stepGame, createBot } from '../src/game.js';
 
@@ -70,43 +71,19 @@ test('wrapZ lands in the window and keeps the period', () => {
   }
 });
 
-test('every pose gives finite joints; unknown pose falls back to glide', () => {
-  for (const pose of [...Object.keys(CFG.character.poses), 'nope']) {
-    for (const mirror of [false, true]) {
-      const t = poseTarget(pose, 1.7, mirror);
-      assert.equal(t.length, JOINTS.length * 3);
-      assert.ok(t.every(Number.isFinite), pose);
-    }
+test('procedural skin has a continuous indexed surface and normalized anatomical weights', () => {
+  const g = skinSurface();
+  assert.ok(g.indices.length > 10000 && g.positions.every(Number.isFinite));
+  assert.equal(g.weights.length, g.positions.length / 3 * 4);
+  for (let i=0;i<g.weights.length;i+=4) {
+    assert.ok(near(g.weights.slice(i,i+4).reduce((a,b)=>a+b,0),1));
+    assert.ok(g.skinIndices.slice(i,i+4).every(j=>j>=0&&j<ANATOMY.length));
   }
-  assert.deepEqual(poseTarget('nope', 0, false), poseTarget('glide', 0, false));
-});
-
-test('swing raises the web arm; mirroring moves it to the other side', () => {
-  const i = (j) => JOINTS.indexOf(j) * 3;
-  const r = poseTarget('swing', 0, false), l = poseTarget('swing', 0, true);
-  assert.ok(r[i('shR') + 2] > 2.5, 'right arm overhead (+z raises the right arm)');
-  assert.ok(l[i('shL') + 2] < -2.5, 'mirrored: left arm overhead (mirrored sign)');
-  assert.ok(near(l[i('shL') + 2], -r[i('shR') + 2]));
-  // symmetric pose: left = mirrored right
-  const g = poseTarget('glide', 0, false);
-  assert.ok(near(g[i('shL') + 2], -g[i('shR') + 2]));
-});
-
-test('blendPose eases frame-rate independently and converges', () => {
-  const a = poseTarget('glide', 0, false), b = poseTarget('tuck', 0, false);
-  const one = blendPose(Float64Array.from(a), b, 1 / 30);
-  const two = blendPose(blendPose(Float64Array.from(a), b, 1 / 60), b, 1 / 60);
-  for (let k = 0; k < a.length; k++) assert.ok(near(one[k], two[k]));
-  const done = blendPose(Float64Array.from(a), b, 10);
-  for (let k = 0; k < a.length; k++) assert.ok(near(done[k], b[k], 1e-6));
-});
-
-test('trick flips make exactly one turn over trickSec', () => {
-  assert.equal(flipAngle('roll', 0), 0);
-  assert.ok(near(flipAngle('tuck', CFG.trickSec), Math.PI * 2));
-  assert.ok(near(flipAngle('roll', CFG.trickSec * 5), Math.PI * 2));
-  assert.equal(flipAngle('glide', 0.3), 0);
-  assert.equal(flipAngle('swing', 0.3), 0);
+  assert.ok(g.indices.every(i=>i>=0&&i<g.positions.length/3));
+  const parent=Array.from({length:g.positions.length/3},(_,i)=>i);
+  const find=i=>parent[i]===i?i:parent[i]=find(parent[i]);
+  for(let i=0;i<g.indices.length;i+=3){const [a,b,c]=g.indices.slice(i,i+3);parent[find(b)]=find(a);parent[find(c)]=find(a);}
+  assert.equal(new Set(parent.map((_,i)=>find(i))).size,1,'surface must be connected');
 });
 
 // Project in the camera basis without needing WebGL or a CDN in the Node suite.
@@ -217,14 +194,4 @@ test('camera on generated courses: always leashed, the hero framed >= 99.5% of f
   let n = 0, good = 0;
   for (let seed = 1; seed <= 8; seed++) for (const zip of [false, true]) filmBot(seed, zip, 15, null, (f) => { leashOk(f); n++; if (framed(f.s)) good++; });
   assert.ok(good / n >= 0.995, `${n - good} of ${n} frames off`);
-});
-
-test('wallrun and roof run poses stride with t (legs in opposite phase); walljump is a static tuck', () => {
-  const hip = (pose, t, j) => poseTarget(pose, t, false)[JOINTS.indexOf(j) * 3];
-  const T = Math.PI / 2 / CFG.character.runFreq; // a quarter stride
-  for (const pose of ['wallrun', 'run']) {
-    assert.ok(hip(pose, T, 'hipL') - hip(pose, 0, 'hipL') > 0.5, pose);
-    assert.ok(hip(pose, T, 'hipR') - hip(pose, 0, 'hipR') < -0.5, pose);
-  }
-  assert.equal(hip('walljump', 0, 'hipL'), hip('walljump', 1, 'hipL'));
 });

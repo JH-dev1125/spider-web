@@ -11,12 +11,14 @@ const ctx = canvas.getContext('2d');
 let w = 0, h = 0;
 let renderer = null; // three.js loads from a CDN: if it fails, say so instead of a blank screen
 import('./render.js')
-  .then((m) => { renderer = m.createRenderer(document.getElementById('gl')); resize(); })
+  .then((m) => { renderer = m.createRenderer(document.getElementById('gl')); resize(); frame(); })
   .catch((err) => {
     console.error(err);
+    renderer = null;
     const p = document.body.appendChild(document.createElement('p'));
     p.textContent = `3D 렌더러를 불러오지 못했습니다 (${err.message}). 네트워크를 확인하고 새로고침하세요.`;
     p.style.cssText = 'position:fixed;left:0;right:0;bottom:40px;margin:0;text-align:center;color:#fff;font:16px system-ui';
+    frame();
   });
 
 function resize() {
@@ -76,7 +78,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 function start() {
-  g = createGame(Date.now());
+  g = createGame(Number(q.get('seed')) || Date.now());
   actions = [];
   tracker.cancel(); // a key held through death must not release anything on the first frame
   bot = autoplay ? createBot({ zip: q.has('autozip') }) : null;
@@ -192,13 +194,13 @@ function frame() {
   const t = now();
   const dt = Math.min(CFG.maxDt, t - last); // also keeps a tab switch from becoming one huge step
   last = t;
-  update(dt);
+  if (!q.has('t')) update(dt);
   renderer?.render({
     player: g.player,
     structures: g.world.structures,
     web: g.web,
     missLine: g.missLine,
-    pose: q.get('debugPose') || g.pose, // ?debugPose=<name> pins a pose for screenshots
+    pose: g.pose,
     t,
     shake: g.shake,
   }, dt);
@@ -212,4 +214,3 @@ if (autoplay) {
   // ?t=<sec> fast-forwards the autoplay in maxDt steps (headless screenshots barely advance rAF)
   for (let s = 0; s < (Number(q.get('t')) || 0); s += CFG.maxDt) update(CFG.maxDt);
 }
-requestAnimationFrame(frame);

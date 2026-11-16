@@ -2,8 +2,8 @@
 //
 // Renderer contract — the view main.js passes to renderer.render(view, dt) every frame:
 //   { player, structures, web, missLine, pose, t, shake }
-//   player     { pos:{x,y,z}, vel:{x,y,z}, anchor:{x,y,z}|null, ropeLen, alive } — pos/vel are copied from the
-//              physics body each frame (plus swingPhase, ropeMin: game-internal, ignore).
+//   player     { ragdoll:{part:Body}, webSide, wall, roof, pos:{x,y,z}, vel:{x,y,z}, anchor:{x,y,z}|null, ropeLen, alive } — pos/vel are copied from the
+//              pelvis each frame; ragdoll body transforms are read-only to the renderer (plus swingPhase, ropeMin: game-internal, ignore).
 //   structures [{ id:string, kind, min:{x,y,z}, max:{x,y,z}, attach:boolean }] — axis-aligned boxes in world metres
 //              (x right, y up, z forward, street at y = 0). kind: 'tower' (solid block) | 'setback' (stepped upper
 //              block on a tower) | 'frame' (one post/beam of a hollow frame, attach false) | 'crane' (mast or jib) |
@@ -43,12 +43,15 @@ export function createGame(seed) {
   return g;
 }
 
-const hand = (p) => ({ x: p.pos.x, y: p.pos.y + CFG.render.playerHand, z: p.pos.z });
+const hand = (p, side = p.webSide) => {
+  const v = p.ragdoll?.['hand' + side]?.position;
+  return v ? { x: v.x, y: v.y, z: v.z } : { ...p.pos };
+};
 
 // Where a web pressed now would go: {from, to, hit} (hit = it lands on something holdable).
 export function aim(g, side, level) {
   const dir = aimVector(side, level, g.player.pos.x);
-  const from = hand(g.player);
+  const from = hand(g.player, side);
   const r = raycast(g.phys, from, dir, CFG.webRange);
   const to = r ? r.point : { x: from.x + dir.x * CFG.webRange, y: from.y + dir.y * CFG.webRange, z: from.z + dir.z * CFG.webRange };
   return { from, to, hit: !!r?.attach };
@@ -58,13 +61,13 @@ export function aim(g, side, level) {
 // dist / webSpeed seconds. A held rope stays until the new web lands (last pressed wins on arrival).
 function fire(g, s) {
   const { from, to, hit } = aim(g, s.side, s.level);
-  g.web = { from, to, dist: Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z), travelled: 0, hit };
+  g.web = { side: s.side, from, to, dist: Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z), travelled: 0, hit };
 }
 
 // Advance the web in flight; on arrival attach (key still held, or it would have been cancelled) or show a miss.
 function flyWeb(g, dt) {
   const w = g.web;
-  w.from = hand(g.player);
+  w.from = hand(g.player, w.side);
   w.travelled = Math.min(w.dist, w.travelled + CFG.webSpeed * dt);
   if (w.travelled < w.dist) return;
   g.web = null;
@@ -93,13 +96,14 @@ export function stepGame(g, dt, actions) {
       } else if (a.type === 'zip') setZip(g.phys, true);
       else if (a.type === 'zipEnd') setZip(g.phys, false);
     }
+    p.mode = g.pose;
     events.push(...stepPhysics(g.phys, p, dt));
     if (g.web && p.alive) flyWeb(g, dt);
     if (events.includes('bottom')) g.shake = CFG.render.shakePeak;
     if (events.includes('bounce')) g.shake = Math.max(g.shake, CFG.render.bounceShake);
     if (events.includes('released')) { g.pose = pickTrickPose(g.rng); g.trickSec = CFG.trickSec; }
     if (events.includes('walljump')) { g.pose = 'walljump'; g.trickSec = CFG.trickSec; }
-  } else g.web = null;
+  } else { g.web = null; stepPhysics(g.phys, p, dt); }
   g.trickSec = Math.max(0, g.trickSec - dt);
   if (!p.alive) g.pose = 'fall';
   else if (p.wall) g.pose = 'wallrun';
@@ -121,6 +125,7 @@ export function createBot({ zip = false } = {}) {
     dt = Math.min(dt, CFG.maxDt);
     if (!p.alive) return [];
     if (zip && held && p.anchor && zipped !== p.anchor && p.anchor.y > p.pos.y + 5 && p.anchor.z > p.pos.z + 10) { zipped = p.anchor; return [{ type: 'zip' }]; }
+    if (p.wall) return []; // keep the web through the stance; foot-induced velocity is not a swing bottom
     if (held && p.anchor) {
       const v = p.vel, speed = Math.hypot(v.x, v.y, v.z);
       if (p.swingPhase !== 'ascending' || (v.y < CFG.botReleaseClimb * speed && speed > CFG.botStallSpeed)) return [];
@@ -137,7 +142,7 @@ export function createBot({ zip = false } = {}) {
         if (!a.hit) continue;
         const len = Math.hypot(a.to.x - p.pos.x, a.to.y - p.pos.y, a.to.z - p.pos.z);
         // swing bottom after reeling, minus a penalty for already drifting toward that wall
-        const score = a.to.y - len * CFG.reelMinFactor - 3 * Math.max(0, Math.sign(a.to.x) * p.vel.x);
+        const score = a.to.y - len * CFG.reelMinFactor - 3 * Math.max(0, Math.sign(a.to.x) * p.vel.x) + (Math.sign(a.to.x) === Math.sign(p.pos.x) ? 3 : 0);
         if (len >= CFG.botRopeMin && len <= CFG.botRopeMax && score > bestScore) { bestScore = score; best = { type: 'press', side, level }; }
       }
     }
