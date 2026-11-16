@@ -57,31 +57,70 @@ export function makeRagdoll(world, p, material, footMaterial) {
         joint.update = () => { hingeUpdate(); stop.update(); };
       } else joint = new C.ConeTwistConstraint(parent, b, { ...opts, axisA: UP, axisB: UP, angle: a.cone, twistAngle: a.twist });
       for (const eq of joint.equations) eq.setSpookParams(1e8, 4, CFG.physicsStep);
-      world.addConstraint(joint); joints.push({ a, parent, body: b, joint });
+      world.addConstraint(joint); joints.push({ a, parent, body: b, joint, motor: motorOn(world, parent, b) });
     }
   }
   // the whole rig's inertia about the pelvis (smallest principal axis, roughly): the root muscle's scale
   const rootInertia = Object.values(bodies).reduce((s, b) => s + minInertia(b) + b.mass * b.position.distanceSquared(bodies.pelvis.position), 0) / 2;
-  return { bodies, joints, rootInertia, targets: Object.fromEntries(ANATOMY.map(a => [a.name, new C.Quaternion()])), time: 0 };
+  // the root muscle: the pelvis's world orientation against a static frame (the upright reference)
+  const frame = new C.Body({ mass: 0, collisionFilterGroup: 0, collisionFilterMask: 0 }); world.addBody(frame);
+  return { bodies, joints, rootInertia, root: motorOn(world, frame, bodies.pelvis), targets: Object.fromEntries(ANATOMY.map(a => [a.name, new C.Quaternion()])), time: 0 };
 }
 
-// Quaternion error -> torque-limited PD muscle. No body transforms are assigned.
-// Gains are capped by the smaller rotational inertia of the pair (kp <= k*I, kd <= c*I, CFG.muscle): an explicit PD
-// on a 0.6 kg hand with trunk gains rings to hundreds of rad/s in one step; scaled, every joint has the same
-// natural frequency (sqrt(k)) and damping ratio (c / 2 sqrt(k)) and stays stable at the physics step.
-// inertia: overrides the pair's (the root muscle turns the whole rig through its stiff joints).
+// Muscles are VELOCITY SERVOS solved inside the constraint solver (three RotationalMotorEquations per joint, one per
+// world axis): the child's angular velocity relative to its parent is driven to omega * (its orientation error), up to a
+// torque cap. Solved implicitly with the joints, they stay stable at any stiffness, hold a pose under load (the error
+// decays at rate omega whatever the load, until the cap) and still give way on impacts. No transforms are assigned.
 const minInertia = (b) => Math.min(b.inertia.x, b.inertia.y, b.inertia.z);
-function muscle(body, target, parent, kp, kd, limit, inertia) {
-  const I = inertia ?? Math.min(minInertia(body), parent ? minInertia(parent) : Infinity);
-  kp = Math.min(kp, CFG.muscle.k * I); kd = Math.min(kd, CFG.muscle.c * I);
-  const inv = body.quaternion.conjugate(), error = target.mult(inv);
-  const sign = error.w < 0 ? -1 : 1;
-  const w = body.angularVelocity.vsub(parent?.angularVelocity || C.Vec3.ZERO);
-  const torque = new C.Vec3(2 * sign * error.x * kp - kd * w.x,
-    2 * sign * error.y * kp - kd * w.y, 2 * sign * error.z * kp - kd * w.z);
-  const len = torque.length(); if (len > limit) torque.scale(limit / len, torque);
-  body.torque.vadd(torque, body.torque);
-  if (parent) parent.torque.vsub(torque, parent.torque);
+const AXES = [new C.Vec3(1, 0, 0), new C.Vec3(0, 1, 0), new C.Vec3(0, 0, 1)];
+function motorOn(world, parent, body) {
+  const c = new C.Constraint(parent, body);
+  for (const axis of AXES) {
+    const eq = new C.RotationalMotorEquation(parent, body, 0);
+    eq.axisA.copy(axis); eq.axisB.copy(axis); c.equations.push(eq);
+  }
+  c.update = () => {};
+  world.addConstraint(c);
+  return c;
+}
+const err = new C.Vec3();
+function muscle(motor, body, target, omega, limit, maxSpeed = 30) {
+  const e = target.mult(body.quaternion.conjugate()); // world rotation still to go
+  if (e.w < 0) { e.x = -e.x; e.y = -e.y; e.z = -e.z; e.w = -e.w; }
+  const s = Math.hypot(e.x, e.y, e.z), angle = 2 * Math.atan2(s, e.w);
+  err.set(e.x, e.y, e.z).scale(s > 1e-9 ? Math.min(maxSpeed, omega * angle) / s : 0, err);
+  motor.equations.forEach((eq, k) => {
+    eq.enabled = limit > 0;
+    eq.targetVelocity = -err[['x', 'y', 'z'][k]]; // (the equation drives parent minus child)
+    eq.maxForce = limit; eq.minForce = -limit;
+  });
+}
+const relax = (motor) => { for (const eq of motor.equations) eq.enabled = false; };
+
+// A rotation whose local x, y, z axes are the given orthonormal world vectors.
+function fromAxes(q, x, y, z) {
+  const tr = x.x + y.y + z.z;
+  if (tr > 0) { const s = .5 / Math.sqrt(tr + 1); q.set((y.z - z.y) * s, (z.x - x.z) * s, (x.y - y.x) * s, .25 / s); }
+  else if (x.x > y.y && x.x > z.z) { const s = 2 * Math.sqrt(1 + x.x - y.y - z.z); q.set(.25 * s, (y.x + x.y) / s, (z.x + x.z) / s, (y.z - z.y) / s); }
+  else if (y.y > z.z) { const s = 2 * Math.sqrt(1 + y.y - x.x - z.z); q.set((y.x + x.y) / s, .25 * s, (z.y + y.z) / s, (z.x - x.z) / s); }
+  else { const s = 2 * Math.sqrt(1 + z.z - x.x - y.y); q.set((z.x + x.z) / s, (z.y + y.z) / s, .25 * s, (x.y - y.x) / s); }
+  return q.normalize();
+}
+// Two-link arm reach toward goal: the upper arm aims at the elbow (placed out and back), twisted so the elbow hinge
+// (local x) bends the forearm onto the goal; the forearm is the upper arm turned about that hinge. Hinge-consistent.
+function armTargets(b, t, side, goal) {
+  const sd = side === 'L' ? -1 : 1, sh = b.chest.pointToWorldFrame(new C.Vec3(sd * .24, .18, 0));
+  const d = goal.vsub(sh), dist = clamp(d.length(), .12, .64); d.normalize();
+  const L1 = .31, L2 = .35, a = (L1 * L1 - L2 * L2 + dist * dist) / (2 * dist);
+  const out = b.chest.quaternion.vmult(new C.Vec3(sd, 0, -.6)); out.vsub(d.scale(out.dot(d)), out); out.normalize();
+  const elbow = sh.vadd(d.scale(a)).vadd(out.scale(Math.sqrt(Math.max(.0001, L1 * L1 - a * a))));
+  const y = sh.vsub(elbow); y.normalize(); // the upper arm hangs along its local -y
+  const z = sh.vadd(d.scale(dist)).vsub(elbow); z.vsub(y.scale(z.dot(y)), z); z.normalize(); // the forearm bends to +z
+  const x = y.cross(z);
+  fromAxes(t['upperArm' + side], x, y, z);
+  const bend = Math.PI - Math.acos(clamp((L1 * L1 + L2 * L2 - dist * dist) / (2 * L1 * L2), -1, 1));
+  t['upperArm' + side].mult(new C.Quaternion().setFromAxisAngle(new C.Vec3(1, 0, 0), -bend), t['forearm' + side]);
+  t['hand' + side].copy(t['forearm' + side]);
 }
 
 function limbTarget(target, from, to) {
@@ -129,20 +168,13 @@ export function driveRagdoll(ph, p, h, impulse, angularImpulse) {
   for (const side of ['L', 'R']) {
     const sd = side === 'L' ? -1 : 1;
     const upper = t['upperArm' + side], lower = t['forearm' + side];
-    const isWeb = ph.rope && (side === ph.webSide || ph.grip);
+    const isWeb = ph.rope && (side === ph.webSide || !ph.wall); // two hands on the line (one on a wall run)
     if (isWeb) {
-      // Both hands on the line (two-hand grip): reach for the pivot; under load the elbows straighten (ph.load =
-      // the ropes' solved tension / strainForce), slack they stay bent.
-      const sh = b.chest.pointToWorldFrame(new C.Vec3(sd * .24, .18, 0));
-      // the upper hand reaches for the pivot; the other for the line 0.12 m below the upper hand
-      let goal = ph.anchor.position;
-      if (side !== ph.webSide) {
-        const top = b['hand' + ph.webSide].position, u = goal.vsub(top); u.normalize();
-        goal = top.vsub(u.scale(.12));
-      }
-      limbTarget(upper, sh, goal);
-      const q = new C.Quaternion(); q.setFromEuler(-.7 * (1 - (ph.load || 0)), 0, 0); upper.mult(q, lower);
-      t['hand' + side].copy(lower);
+      // Both hands on the line above his head (the shooting hand on top, the other 0.12 m below it): two-link reach
+      // with the elbows out and back (rig.js gripForces holds the hands there; the rope is drawn from them).
+      const u = ph.anchor.position.vsub(b.pelvis.position); u.normalize();
+      const goal = b.pelvis.position.vadd(u.scale(CFG.rig.gripReach - (side === ph.webSide ? 0 : .12)));
+      armTargets(b, t, side, goal);
     } else {
       const q = new C.Quaternion();
       q.setFromEuler(-.25, 0, sd * (ph.wall || p.roof ? .25 : 1.05)); basis.mult(q, upper);
@@ -188,7 +220,7 @@ export function driveRagdoll(ph, p, h, impulse, angularImpulse) {
   // else owning the body, link after link with no glide between; a press cancels it, preland overrides it.
   let flightSpinning = false;
   if (ph.flight) {
-    const pressed = ph.flightPressed;
+    const pressed = ph.flightPressed || ph.webOut; // (a web in flight holds the chain off: the shot owns the arms)
     ph.flightPressed = false;
     const free = p.alive && !ph.rope && !ph.wall && !p.roof && !ph.landing && !ph.motion && ph.startPhase === 'play';
     const f = ph.flight.step(h, { airborne: free, rope: !!ph.rope, pressed, preland: !!ph.landing,
@@ -207,22 +239,21 @@ export function driveRagdoll(ph, p, h, impulse, angularImpulse) {
       if (!ph.flightPrelandSec) ph.flightFrom = ph.flightLast || copyTargets(t);
       ph.flightPrelandSec += h; ph.targetBlend = null; ph.flightMove = 'preland';
       sampleMove(MOVES.preland, ph.flightPrelandSec, basis, t, { from: ph.flightFrom, alpha: Math.min(1, ph.flightPrelandSec / .25) });
-    } else ph.flightPrelandSec = 0;
+    } else { ph.flightPrelandSec = 0; if (free && ph.webOut) ph.flightMove = 'shoot'; } // (aiming a web: not idle)
     ph.glideIdle = free && !ph.flightMove ? (ph.glideIdle || 0) + h : 0; // free but nothing chained (tests bound it)
     ph.flightLast = copyTargets(t);
   }
   // Balance assistance supplies an upright reference (t.pelvis); joints still react against one another. Off while a
   // move spins him (it would fight the flip); stiff for the landing hold and on walls and roofs.
   const spinning = motion && motion.sec < motion.move.duration && motion.move.impulses.some(e => e.angular);
-  const firm = ph.landing || ph.wall || p.roof;
-  if (!spinning && !flightSpinning) muscle(b.pelvis, t.pelvis, null, firm ? 1600 : 180, firm ? 110 : 25, firm ? 650 : 100, ph.landing ? CFG.moves.landingRootInertia : r.rootInertia);
+  const firm = ph.landing || ph.wall || p.roof || ph.startPhase === 'idle', M = CFG.muscle;
+  if (!spinning && !flightSpinning) muscle(r.root, b.pelvis, t.pelvis, firm ? M.rootFirm[0] : M.root[0], firm ? M.rootFirm[1] : M.root[1]);
+  else relax(r.root);
+  const stiff = ph.landing && ph.landing.sec < CFG.moves.landingStiffSec ? 1.4 : 1; // the impact, then the hold
   for (const j of r.joints) {
     const desired = t[j.a.parent].conjugate().mult(t[j.a.name]);
-    const target = j.parent.quaternion.mult(desired);
-    const leg = /thigh|shin/.test(j.a.name), trunk = j.a.name === 'chest';
-    const stiff = ph.landing && ph.landing.sec < CFG.moves.landingStiffSec ? 2 : 1; // the impact, then the hold
-    const kp = stiff * (trunk ? (ph.wall ? 900 : 380) : leg ? 250 : (ph.wall && j.a.name === 'head' ? 150 : 65));
-    const kd = trunk ? (ph.wall ? 50 : 25) : leg ? 18 : (ph.wall && j.a.name === 'head' ? 10 : 4);
-    muscle(j.body, target, j.parent, kp, kd, trunk ? (ph.wall ? 400 : 200) : leg ? 130 : 65);
+    const target = j.parent.quaternion.mult(desired); // (the parent as it is now: the error is the joint's own)
+    const g = M[j.a.name.replace(/[LR]$/, '')]; // [omega rad/s, torque cap N m] per segment (CFG.muscle)
+    muscle(j.motor, j.body, target, g[0], stiff * g[1]);
   }
 }

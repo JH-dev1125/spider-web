@@ -7,6 +7,7 @@ import { skinSurface } from '../src/character.js';
 import { ANATOMY } from '../src/ragdoll.js';
 import { createPlayer } from '../src/player.js';
 import { createGame, stepGame, createBot } from '../src/game.js';
+import { placeHero } from '../src/player.js';
 
 const R = CFG.render;
 const near = (a, b, eps = 1e-9) => Math.abs(a - b) < eps;
@@ -156,7 +157,7 @@ const corridor = (g) => {
 };
 // Runs the bot (zipping or not) for up to `sec` with the camera; calls check(frame info) every frame.
 function filmBot(seed, zip, sec, setupCourse, check) {
-  const g = createGame(seed), bot = createBot({ zip });
+  const g = createGame(seed, { rig: false }), bot = createBot({ zip });
   setupCourse?.(g);
   let c = null;
   const seen = new Set();
@@ -188,7 +189,7 @@ test('camera: through swing ends, fast releases, zips and wall runs the hero sta
     assert.ok(fast > 26, `seed ${seed}: never fast (${fast.toFixed(1)} m/s)`);
   }
   // swings no longer drift into the walls, so run into one on purpose for a wall run and its jump
-  filmBot(5, false, 6, (g) => { corridor(g); for (const b of Object.values(g.phys.rag.bodies)) { b.position.x += 9; b.velocity.x = 10; } }, check).forEach((e) => seen.add(e));
+  filmBot(5, false, 6, (g) => { corridor(g); const p = g.player; placeHero(g.phys, p, { ...p.pos, x: p.pos.x + 9 }, { ...p.vel, x: 10 }); }, check).forEach((e) => seen.add(e));
   for (const e of ['released', 'zipped', 'wallrun', 'walljump']) assert.ok(seen.has(e), `never saw ${e}`);
 });
 

@@ -9,11 +9,11 @@ const box = (id, kind, min, max, attachable = kind !== 'frame') => ({ id, kind, 
 const len3 = (v) => Math.hypot(v.x, v.y, v.z);
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 
-function setup({ pos, vel, structures = [] } = {}) {
+function setup({ pos, vel, structures = [], rig = true } = {}) {
   const p = createPlayer();
   if (pos) p.pos = { ...pos };
   if (vel) p.vel = { ...vel };
-  const ph = createPhysics(p);
+  const ph = createPhysics(p, { rig });
   syncStructures(ph, structures);
   return { p, ph };
 }
@@ -22,7 +22,7 @@ const inside = (p, s) => ['x', 'y', 'z'].every((k) => p[k] > s.min[k] && p[k] < 
 test('free flight: plain gravity plus a little quadratic drag', () => {
   const { p, ph } = setup({ vel: { x: 0, y: 0, z: 0 } });
   for (let i = 0; i < 60; i++) stepPhysics(ph, p, DT);
-  const velocity = Object.values(ph.rag.bodies).reduce((v, b) => v + b.velocity.y * b.mass / CFG.heroMass, 0);
+  const velocity = p.vel.y; // the core
   const vt = Math.sqrt(CFG.gravity / CFG.airDrag), vy = -vt * Math.tanh(CFG.gravity / vt); // falling from rest for 1 s
   assert.ok(Math.abs(velocity - vy) < 0.07 && velocity > -CFG.gravity, `vy ${p.vel.y} vs ${vy}`);
   assert.ok(Math.abs(p.pos.y - (CFG.startHeight - 0.5 * CFG.gravity)) < 0.15);
@@ -58,7 +58,7 @@ test('the rope pulls but never pushes; held taut it keeps the hero within its le
   const s = setup({ pos: { x: 0, y: 60, z: 0 }, vel: { x: 0, y: 0, z: 20 } });
   attach(s.ph, s.p, anchor);
   stepPhysics(s.ph, s.p, DT);
-  assert.ok(Math.abs(Object.values(s.ph.rag.bodies).reduce((v,b)=>v+b.velocity.z*b.mass/CFG.heroMass,0) - 20 * (1-CFG.airDrag*20*DT)) < .02);
+  assert.ok(Math.abs(s.p.vel.z - 20 * (1-CFG.airDrag*20*DT)) < .02);
   assert.equal(s.ph.rope.distanceEquation.maxForce, 0);
 });
 
@@ -87,7 +87,7 @@ test('release removes the rope and leaves the velocity exactly as the swing made
   assert.ok(release(ph, p));
   assert.deepEqual({ x: hv.x, y: hv.y, z: hv.z }, v);
   assert.equal(p.anchor, null);
-  assert.equal(ph.world.constraints.length, 14);
+  assert.equal(ph.world.constraints.length, 0); // the core world holds only the rope
   assert.equal(release(ph, p), false);
 });
 
@@ -163,26 +163,27 @@ function throwAtWall(vel, structures = [face()]) {
   const log = []; // per frame {ev, pos, vel}
   for (let i = 0; i < 210; i++) {
     const ev = stepPhysics(s.ph, s.p, DT);
-    log.push({ axis: Math.abs(s.ph.hero.quaternion.vmult({x:0,y:1,z:0}).x),
-      gait: Object.fromEntries(Object.entries(s.ph.gait || {}).map(([side, g]) => [side, {plants:g.plants, pin:!!g.pin}])), ev, pos: { ...s.p.pos }, vel: { ...s.p.vel }, wall: s.p.wall });
+    const r = s.ph.rag.bodies, axis = r.head.position.vsub(r.footL.position.vadd(r.footR.position).scale(.5));
+    log.push({ axis: Math.abs(axis.x) / axis.length(), feet: { L: r.footL.position.x, R: r.footR.position.x },
+      ev, pos: { ...s.p.pos }, vel: { ...s.p.vel }, wall: s.p.wall });
     for (const b of structures) assert.ok(!inside(s.p.pos, b), `inside ${b.id} at frame ${i}`);
   }
   return { ...s, log };
 }
 
-test('wall walk: perpendicular body, alternating planted soles, timed kick-off', () => {
+test('wall walk: the core runs along the face; the follower lies perpendicular to it, feet striding; timed kick-off', () => {
   const { log } = throwAtWall({ x: 15, y: -6, z: 20 });
   const r = log.findIndex(f => f.ev.includes('wallrun')), j = log.findIndex(f => f.ev.includes('walljump'));
   assert.ok(r >= 0 && j > r, 'run then jump');
   assert.ok(Math.abs((j-r)*DT-CFG.wallRunSec) <= 2*DT && (j-r)*DT < 3);
-  const run = log.slice(r+36, j); // physical turn takes 0.6 s; no pose is pinned at entry
-  assert.ok(run.every(f => f.axis >= Math.cos(Math.PI/6)), 'long axis >30 degrees from wall normal');
-  for (const side of ['L','R']) {
-    assert.ok(Math.max(...run.map(f => f.gait[side]?.plants || 0)) >= 2, side+' did not step twice');
-    assert.ok(run.some(f=>f.gait[side]?.pin) && run.some(f=>!f.gait[side]?.pin), side+' never lifted');
+  const run = log.slice(r+36, j); // the follower turns onto the facade in ~0.3 s
+  assert.ok(run.every(f => f.axis >= Math.cos(Math.PI/6)), 'head-to-feet axis within 30 degrees of the wall normal');
+  assert.ok(run.every(f => f.wall === -1 && W - f.pos.x > CFG.heroRadius - .05 && W - f.pos.x < CFG.heroRadius + CFG.wallRunSkin + .05));
+  for (const side of ['L', 'R']) { // each sole steps onto the glass and lifts off it again
+    const gaps = run.map(f => W - f.feet[side]);
+    assert.ok(Math.min(...gaps) < .15 && Math.max(...gaps) > .25, `${side} sole gaps ${Math.min(...gaps).toFixed(2)}..${Math.max(...gaps).toFixed(2)}`);
   }
-  assert.ok(run.every(f => f.wall === -1 && W-f.pos.x > .6 && W-f.pos.x < 1.0));
-  assert.ok(run.at(-1).pos.z > run[0].pos.z + 1, 'walk advances along facade');
+  assert.ok(run.at(-1).pos.z > run[0].pos.z + 1, 'the run advances along the facade');
 });
 
 test('wall jump: contact stance kicks away, upward and forward', () => {
@@ -214,7 +215,7 @@ test('wall run cooldown: driven straight back into the face, no new run until wa
   const { p, ph } = setup({ pos: { x: W - 3, y: 60, z: 0 }, vel: { x: 15, y: 0, z: 20 }, structures: [face()] });
   let t = 0, jumpT = null, again = null;
   for (let i = 0; i < 180; i++, t += DT) {
-    if (jumpT !== null) for(const b of Object.values(ph.rag.bodies)) b.velocity.x = 12; // keep shoving him into the wall
+    if (jumpT !== null) ph.hero.velocity.x = 12; // keep shoving him into the wall
     const ev = stepPhysics(ph, p, DT);
     if (ev.includes('walljump') && jumpT === null) jumpT = t;
     else if (ev.includes('wallrun') && jumpT !== null) { again = t; break; }
@@ -247,37 +248,15 @@ test('wall run with a rope: the rope still holds him, and a zip into a wall land
   assert.ok(ev.includes('wallrun'), `events ${ev.join(' ')}`);
 });
 
-test('ragdoll owns 70 kg, fourteen limited joints and the rope on a hand; release changes no velocities', () => {
+test('the follower: 70 kg, fourteen limited joints in its own world; the rope holds the core; release changes no velocities', () => {
   const {p,ph}=setup();
   assert.equal(Object.keys(ph.rag.bodies).length,15);
   assert.equal(Object.values(ph.rag.bodies).reduce((m,b)=>m+b.mass,0),70);
   assert.equal(ph.rag.joints.length,14);
   for(const j of ph.rag.joints) assert.ok(j.joint.equations.length>=5 && !j.joint.collideConnected);
-  attach(ph,p,{x:-14,y:65,z:40});assert.equal(ph.rope.bodyA,ph.rag.bodies.handL);
+  assert.ok(Object.values(ph.rag.bodies).every(b => b.world === ph.rig.world && b.world !== ph.world), 'its own Cannon world');
+  attach(ph,p,{x:-14,y:65,z:40}); assert.equal(ph.rope.bodyA,ph.hero);
   for(let i=0;i<120;i++)stepPhysics(ph,p,DT);
-  const velocities=Object.values(ph.rag.bodies).map(b=>b.velocity.toString());
-  release(ph,p);assert.deepEqual(Object.values(ph.rag.bodies).map(b=>b.velocity.toString()),velocities);
-});
-
-test('wall soles hold their contact point and visibly lift between plants on both facades', () => {
-  for(const side of [-1,1]) {
-    const structure=side===1?face():box('left','tower',{x:-34,y:0,z:-50},{x:-14,y:150,z:400});
-    const {p,ph}=setup({pos:{x:side*11,y:60,z:0},vel:{x:side*15,y:-6,z:20},structures:[structure]});
-    const pins=new Map(),counts={L:0,R:0},lifts={L:0,R:0};let angleMin=1;
-    for(let i=0;i<155;i++){
-      stepPhysics(ph,p,DT);
-      if(ph.wall?.sec>.6) {
-        const head=ph.rag.bodies.head.position,feet=ph.rag.bodies.footL.position.vadd(ph.rag.bodies.footR.position).scale(.5);
-        const axis=head.vsub(feet);angleMin=Math.min(angleMin,Math.abs(axis.x)/axis.length());
-      }
-      for(const [s,g] of Object.entries(ph.gait||{})){
-        counts[s]=Math.max(counts[s],g.plants);
-        const foot=ph.rag.bodies['foot'+s],sole=foot.pointToWorldFrame({x:0,y:-.045,z:0});
-        if(g.pin){const prev=pins.get(s);if(prev?.pin===g.pin)assert.ok(sole.distanceTo(prev.point)<.08,'sole slid '+s);pins.set(s,{pin:g.pin,point:sole.clone()});}
-        else if(g.plants)lifts[s]=Math.max(lifts[s],Math.abs(sole.x-side*14));
-      }
-    }
-    assert.ok(angleMin>=Math.cos(Math.PI/6),'head-to-feet axis '+angleMin);
-    for(const s of ['L','R']){assert.ok(counts[s]>=2,s);assert.ok(lifts[s]>.15,s+' never lifted away');}
-  }
+  const velocities=[ph.hero, ...Object.values(ph.rag.bodies)].map(b=>b.velocity.toString());
+  release(ph,p); assert.deepEqual([ph.hero, ...Object.values(ph.rag.bodies)].map(b=>b.velocity.toString()),velocities);
 });

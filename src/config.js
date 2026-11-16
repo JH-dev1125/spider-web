@@ -9,10 +9,25 @@ export const CFG = deepFreeze({
   physicsStep: 1 / 120, // fixed step: each frame runs whole steps off an accumulator, so a dt sequence replays exactly
   gravity: 9.81,
   heroMass: 70,
-  // ragdoll muscle gain caps per unit rotational inertia (ragdoll.js muscle): kp <= k*I, kd <= c*I
   inertiaFloor: 0.005, // kg m^2: light segments (hands, feet, forearms) get at least this rotational inertia (ragdoll.js)
-  muscle: { k: 900, c: 60 }, // natural frequency 30 rad/s, damping ratio 1; stable at the 1/120 s step
-  roofRunSpeed: 3, // m/s: landed on a roof without a rope, the hero runs forward and drops off the edge
+  // ragdoll muscles (ragdoll.js, velocity servos in the solver): per segment [rate 1/s, torque cap N m]: the pose error
+  // closes at this rate under any load up to the cap. The trunk is near-rigid; the limbs give only on impacts.
+  muscle: {
+    chest: [30, 900], head: [24, 200], upperArm: [32, 260], forearm: [32, 160], hand: [24, 40],
+    thigh: [22, 600], shin: [22, 400], foot: [18, 80],
+    root: [5, 120], rootFirm: [12, 1500], // the pelvis upright reference: soft in flight, firm on walls/roofs/landing
+  },
+  webShoulder: { x: 0.2, y: 0.45 }, // m: webs leave from the core's shoulder on the shooting side (game.js aim)
+  heroRadius: 0.5, // the core sphere (player.js): the gameplay body, at the pelvis
+  soleDrop: 1.0, // m from the core (pelvis) down to the soles in flight
+  landingGap: 0.5, // the hero landing starts with the core this far above resting on the street (his soles touch it)
+  // the ragdoll follower (rig.js)
+  rig: {
+    iterations: 12, followOmega: 22, followMax: 450, liftSec: .15,
+    standY: .96, wallStance: .78, // pelvis height on a roof, pelvis distance off a wall face
+    gripReach: .86, gripK: 2500, gripC: 70, gripMax: 400, // the hands on the rope line (above the pelvis toward the pivot)
+  },
+  roofRunSpeed: 8, // m/s: landed on a roof without a rope, the hero runs forward and drops off the edge
   airDrag: 0.007, // 1/m: quadratic drag, a = airDrag * v^2; terminal speed sqrt(g / airDrag) = 37 m/s (was 0.003: too fast overall)
   heroFriction: 0.05, // grazing a facade costs ~10% of the speed (was 0: walls felt like ice; 0.25 cost ~45% per graze)
   heroRestitution: 0.2,
@@ -80,6 +95,8 @@ export const CFG = deepFreeze({
   wallRunMinSpeed: 2.5, // m/s into the face (before the hit) that starts a run; slower is a plain bump
   wallRunSec: 2.2, // seconds, including the physical turn onto the facade
   wallRunGravity: 0.15, // fraction of gravity while running
+  wallRunSkin: 0.15, // m: the core within heroRadius + this of a face counts as touching it
+  wallRunMaxSink: 1, // m/s: a faster fall is cut to this when the run starts
   wallRunCooldownSec: 0.6, // no new run this long after a wall jump
   wallJump: { out: 9, up: 6, fwd: 3 }, // m/s added at the end of a run: away from the wall, up, along the run
   ropeMaxForce: 3e4, // N, the rope's tension limit (70 kg at 40 m/s on a 30 m rope needs ~4 kN); under the ragdoll joints' 4e4, so a rope never tears a wrist apart

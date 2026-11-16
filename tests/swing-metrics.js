@@ -20,7 +20,7 @@ function touching(p, structures) {
 }
 
 export function runSwings(seed, sec = 30, bot = createBot()) {
-  const g = createGame(seed), p = g.player;
+  const g = createGame(seed, { rig: false }), p = g.player;
   const swings = [];
   let cur = null, touch = false, contacts = 0, wallruns = 0, t = 0;
   for (; t < sec && p.alive; t += DT) {

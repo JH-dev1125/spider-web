@@ -15,7 +15,7 @@ const dot2 = (a, b) => a.x * b.x + a.z * b.z;
 
 // Put the hero on the start street `before` metres short of row `row`, at height y, flying forward at speed.
 function approach(seed, { row = 1, before = 72, y = 45, speed = 20 } = {}) {
-  const g = createGame(seed), z = lineAt(seed, 'row', row) - before;
+  const g = createGame(seed, { rig: false }), z = lineAt(seed, 'row', row) - before;
   placeHero(g.phys, g.player, { x: 0, y, z }, { x: 0, y: 0, z: speed });
   updateWorld(g.world, g.player.pos, g.street);
   syncStructures(g.phys, g.world.structures);
@@ -62,7 +62,7 @@ test('a corner turn: the bot webs the near corner tower, the street switches, ai
 test('no diagonal escape: over long runs the hero stays on the streets (within streetMargin of a corridor)', () => {
   const m = CFG.streetMargin + 1e-6;
   for (let seed = 1; seed <= 8; seed++) for (const turn of [null, 'R']) {
-    const g = createGame(seed), bot = createBot({ turn });
+    const g = createGame(seed, { rig: false }), bot = createBot({ turn });
     let far = 0;
     for (let i = 0; i < 60 * 30 && g.player.alive; i++) {
       stepGame(g, DT, bot(g, DT));
@@ -96,7 +96,7 @@ test('score: the distance is the path along the streets (velocity along the curr
   }
   assert.ok(turned > 0);
   // on the start street it is just the distance down it
-  const g = createGame(5), bot = createBot();
+  const g = createGame(5, { rig: false }), bot = createBot();
   for (let i = 0; i < 600 && g.player.alive; i++) stepGame(g, DT, bot(g, DT));
   if (g.street.axis === 'z') assert.ok(Math.abs(g.distance - g.player.pos.z) < 1e-6);
 });

@@ -2,18 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG } from '../src/config.js';
 import { createGame, stepGame, createBot, aim, startGame } from '../src/game.js';
+import { placeHero } from '../src/player.js';
 import { MOVES, FLIGHT } from '../src/moves.js';
 import { makeRng } from '../src/world.js';
 import { aimVector } from '../src/web.js';
 
 const DT = 1 / 60;
 const W = CFG.corridorHalfWidth;
-const comVel = g => Object.values(g.phys.rag.bodies).reduce((v,b)=>({x:v.x+b.velocity.x*b.mass/CFG.heroMass,y:v.y+b.velocity.y*b.mass/CFG.heroMass,z:v.z+b.velocity.z*b.mass/CFG.heroMass}),{x:0,y:0,z:0});
-function place(g, pos, vel) {
-  const d = {x:pos.x-g.phys.hero.position.x,y:pos.y-g.phys.hero.position.y,z:pos.z-g.phys.hero.position.z};
-  for(const b of Object.values(g.phys.rag.bodies)) {b.position.x+=d.x;b.position.y+=d.y;b.position.z+=d.z;b.velocity.set(vel.x,vel.y,vel.z);b.aabbNeedsUpdate=true;}
-  Object.assign(g.player.pos,pos);Object.assign(g.player.vel,vel);
-}
+const comVel = g => ({ ...g.player.vel }); // the core: the gameplay body
+const place = (g, pos, vel) => placeHero(g.phys, g.player, pos, vel);
 const shot = (side, level) => ({ type: 'press', side, level });
 const REL = { type: 'release' };
 const speed = (v) => Math.hypot(v.x, v.y, v.z);
@@ -179,7 +176,7 @@ test('a new press while attached replaces the rope (last pressed wins)', () => {
   assert.deepEqual(g.player.anchor, a); // the old rope holds while the new web flies
   fly(g);
   assert.ok(g.player.anchor && g.player.anchor.x < 0 && a.x > 0);
-  assert.equal(g.phys.world.constraints.length, 15);
+  assert.equal(g.phys.world.constraints.length, 1); // one rope on the core
 });
 
 test('a miss shows a missLine that expires after missShowSec', () => {
@@ -240,8 +237,8 @@ test('release: the release flourish, then the flight chain (FLIGHT links); a pre
   for (let t = 0; t <= MOVES.release.duration + 2 * DT; t += DT) stepGame(g, DT, []);
   assert.equal(g.phys.motion, null);
   assert.ok(FLIGHT[g.phys.flightMove], `a flight link follows the release (${g.phys.flightMove})`);
-  stepGame(g, DT, [shot('L', 'lo')]); // even a miss cancels it
-  assert.equal(g.phys.flightMove, null);
+  stepGame(g, DT, [shot('L', 'lo')]); // even a miss cancels it (he aims the web instead)
+  assert.ok(!FLIGHT[g.phys.flightMove], g.phys.flightMove);
 });
 
 test('shake kicks in at the swing bottom and decays', () => {
@@ -280,14 +277,13 @@ test('never firing dies within 10 s; one death; the hero landing holds on the st
 // Solid structures: the hero's centre is never inside any box, whatever the bot does (many wall hits).
 test('solid: across 10 bot runs of 30 s the hero never ends a frame inside a structure', () => {
   for (let seed = 201; seed <= 210; seed++) {
-    const g = createGame(seed), bot = createBot();
+    const g = createGame(seed, { rig: false }), bot = createBot();
     for (let t = 0; t < 30 && g.player.alive; t += DT) {
       stepGame(g, DT, bot(g, DT));
       const p = g.player.pos;
       for (const s of g.world.structures) {
         const inside = ['x', 'y', 'z'].every((k) => p[k] > s.min[k] && p[k] < s.max[k]);
         assert.ok(!inside, `seed ${seed} t=${t.toFixed(2)}: inside ${s.id}`);
-        for(const b of Object.values(g.phys.rag.bodies)) assert.ok(!['x','y','z'].every(k=>b.position[k]>s.min[k]&&b.position[k]<s.max[k]), `seed ${seed} ${b.part} inside ${s.id}`);
       }
     }
   }
@@ -295,7 +291,7 @@ test('solid: across 10 bot runs of 30 s the hero never ends a frame inside a str
 
 test('deterministic: the same seed and inputs replay exactly', () => {
   const run = () => {
-    const g = createGame(9), bot = createBot();
+    const g = createGame(9), bot = createBot(); // (with the follower: it never feeds back)
     for (let t = 0; t < 10; t += DT) stepGame(g, DT, bot(g, DT));
     return { ...g.player.pos };
   };
@@ -307,7 +303,7 @@ test('deterministic: the same seed and inputs replay exactly', () => {
 test('bot (best holdable aim, let go on the climb) survives 30 s on >= 90% of seeds 1-40', t => {
   const dead = [];
   for (let seed = 1; seed <= 40; seed++) {
-    const g = createGame(seed);
+    const g = createGame(seed, { rig: false }); // the core alone: the follower never changes it (core.test.js)
     const bot = createBot();
     let t = 0;
     for (; t < 30 && g.player.alive; t += DT) stepGame(g, DT, bot(g, DT));
@@ -324,10 +320,10 @@ test('huge dt is clamped to maxDt (tab switch is not instant death)', () => {
   assert.ok(g.elapsed <= CFG.maxDt + 1e-12);
 });
 
-test('a shot casts from the actual hand rigid body', () => {
+test('a shot casts from the core\'s shoulder on that side (gameplay never reads the follower)', () => {
   const g = createGame(1);
   course(g, []);
-  const y0 = g.phys.rag.bodies.handR.position.y;
+  const y0 = g.player.pos.y + CFG.webShoulder.y;
   stepGame(g, 0.0001, [shot('R', 'mid')]);
   const dir = aimVector('R', 'mid', g.player.pos.x); // nothing to hit: the web ends at full range
   assert.ok(Math.abs(g.web.to.y - (y0 + dir.y * CFG.webRange)) < 1e-6);
@@ -348,9 +344,8 @@ function attached(seed = 1, side = 'R', level = 'hi') {
   return g;
 }
 
-const rigMomentum = (g) => Object.values(g.phys.rag.bodies).reduce((m, b) => ({ x: m.x + b.mass * b.velocity.x,
-  y: m.y + b.mass * b.velocity.y, z: m.z + b.mass * b.velocity.z }), { x: 0, y: 0, z: 0 });
-const rigMass = (g) => Object.values(g.phys.rag.bodies).reduce((m, b) => m + b.mass, 0);
+const rigMomentum = (g) => ({ x: CFG.heroMass * g.player.vel.x, y: CFG.heroMass * g.player.vel.y, z: CFG.heroMass * g.player.vel.z });
+const rigMass = () => CFG.heroMass;
 
 test('zip = slingshot: the rope is gone the same frame, ~zipLaunch m/s ahead (tilted toward the rope) over zipLaunchSteps, then a cooldown', () => {
   for (const [seed, side, level] of [[1, 'R', 'hi'], [2, 'L', 'mid'], [3, 'R', 'mid']]) {
@@ -359,7 +354,7 @@ test('zip = slingshot: the rope is gone the same frame, ~zipLaunch m/s ahead (ti
     assert.ok(ev.includes('released') && ev.includes('zipped'), ev.join());
     assert.equal(a.player.anchor, null, 'no rope after the zip frame');
     assert.equal(a.phys.rope, null);
-    assert.equal(a.phys.world.constraints.length, a.phys.rag.joints.length, 'no hidden rope');
+    assert.equal(a.phys.world.constraints.length, 0, 'no hidden rope');
     stepGame(b, DT, [REL]); // the same frame without the launch
     for (let i = 0; i < 2; i++) { stepGame(a, DT, []); stepGame(b, DT, []); } // all zipLaunchSteps delivered
     const M = rigMass(a), pa = rigMomentum(a), pb = rigMomentum(b);
@@ -415,7 +410,7 @@ test('standing on a roof with no rope shows the run pose', () => {
 
 test('W: a web straight ahead and up lands on a crane jib over the street and swings the hero under it', () => {
   const g = createGame(1);
-  const hand = g.phys.rag.bodies.handR.position, jibY = hand.y + 30;
+  const hand = { x: g.player.pos.x, y: g.player.pos.y + CFG.webShoulder.y, z: g.player.pos.z }, jibY = hand.y + 30;
   const zc = hand.z + (jibY - hand.y) / Math.tan(CFG.aimUpDeg.mid * Math.PI / 180), z0 = zc - 1.5, z1 = zc + 1.5; // where the W web meets the jib
   course(g, [
     block('K:mast', 'crane', { x: W + 3, y: 0, z: z0 }, { x: W + 6, y: jibY, z: z1 }),

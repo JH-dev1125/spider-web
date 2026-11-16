@@ -33,20 +33,21 @@ import { makeRng, createWorld, updateWorld, clampToStreets, corridorAt, lineAt, 
   crossKind, cornerOf } from './world.js';
 import { createPlayer, createPhysics, syncStructures, raycast, attach, release, stepPhysics, isTurnAnchor, launchZip, startMove,
   travelBasis, airtime, startTumble, placeHero } from './player.js';
-import { MOVES, createFlightChain } from './moves.js';
+import { MOVES } from './moves.js';
 import { aimVector } from './web.js';
 import { surfaceNormal } from './render-math.js';
 import { makeStreet, heading, right, toLocal, toLocalVec, toWorldVec } from './street.js';
 
 // start: 'air' (default: mid-air at startHeight, flying at startSpeed - the test courses) or 'roof' (the game:
 // standing on the start tower's edge, facing back over the roof, until startGame tumbles him off it).
-export function createGame(seed, { start = 'air' } = {}) {
+// rig: false runs the gameplay core alone (bots and metrics: the core trajectory is the same either way).
+export function createGame(seed, { start = 'air', rig = true } = {}) {
   const player = createPlayer();
   const g = {
     rng: makeRng(seed),
     world: createWorld(seed),
     player,
-    phys: createPhysics(player),
+    phys: createPhysics(player, { rig, seed }),
     elapsed: 0,
     pose: 'glide',
     trickSec: 0,
@@ -57,14 +58,13 @@ export function createGame(seed, { start = 'air' } = {}) {
     distance: 0,
   };
   g.phys.street = g.street;
-  g.phys.flight = createFlightChain(g.rng); // one chain per hero; its history survives ropes
+  g.phys.flight = g.phys.rig?.flight ?? null; // the follower's flight chain (its own rng: gameplay never draws from it)
   g.phys.bound = (pos, vel) => !g.world.fixed && clampToStreets(seed, pos, vel);
   updateWorld(g.world, player.pos, g.street);
   syncStructures(g.phys, g.world.structures);
   if (start === 'roof') {
     const top = g.world.start.max.y, edge = g.world.start.max.z;
-    placeHero(g.phys, player, { x: 0, y: top + 1.02, z: edge - .35 }, { x: 0, y: 0, z: 0 }, Math.PI); // heels at the edge
-    g.phys.standAt = g.phys.hero.position.clone();
+    placeHero(g.phys, player, { x: 0, y: top + CFG.heroRadius, z: edge - .35 }, { x: 0, y: 0, z: 0 }, Math.PI); // heels at the edge
     player.headingYaw = Math.PI; g.phys.startPhase = 'idle'; g.pose = 'idle';
     startMove(g.phys, MOVES.roofIdle, travelBasis(player));
   }
@@ -74,9 +74,15 @@ export function createGame(seed, { start = 'air' } = {}) {
 // Space / open palm on the title: the back tumble off the start roof (same game, same hero).
 export const startGame = (g) => startTumble(g.phys, g.player);
 
-const hand = (p, side = p.webSide) => {
-  const v = p.ragdoll?.['hand' + side]?.position;
-  return v ? { x: v.x, y: v.y, z: v.z } : { ...p.pos };
+// Where a web leaves for gameplay: the core's shoulder on that side (deterministic, never the follower's hand).
+const shoulder = (g, side) => {
+  const p = g.player, rt = right(g.street), sd = side === 'L' ? -1 : side === 'R' ? 1 : 0;
+  return { x: p.pos.x + rt.x * sd * CFG.webShoulder.x, y: p.pos.y + CFG.webShoulder.y, z: p.pos.z + rt.z * sd * CFG.webShoulder.x };
+};
+// The follower's hand (drawn webs start there); the shoulder without a rig.
+const hand = (g, side = g.player.webSide) => {
+  const v = g.player.ragdoll?.['hand' + (side === 'C' ? g.player.webSide : side)]?.position;
+  return v ? { x: v.x, y: v.y, z: v.z } : shoulder(g, side);
 };
 
 // How far ahead webs meet the street faces: aimAhead, unless that point falls in an intersection; then just past it, on
@@ -93,7 +99,7 @@ function aimAhead(g) {
 // Sides and the aim ahead are relative to the street heading (left / right of travel, ahead along it).
 export function aim(g, side, level) {
   const dir = toWorldVec(g.street, aimVector(side, level, toLocal(g.street, g.player.pos).x, aimAhead(g)));
-  const from = hand(g.player, side);
+  const from = shoulder(g, side);
   const r = raycast(g.phys, from, dir, CFG.webRange);
   const to = r ? r.point : { x: from.x + dir.x * CFG.webRange, y: from.y + dir.y * CFG.webRange, z: from.z + dir.z * CFG.webRange };
   return { from, to, hit: !!r?.attach, id: r?.id ?? null };
@@ -109,7 +115,7 @@ function fire(g, s) {
 // Advance the web in flight; on arrival attach (key still held, or it would have been cancelled) or show a miss.
 function flyWeb(g, dt) {
   const w = g.web;
-  w.from = hand(g.player, w.side);
+  w.from = hand(g, w.side); // (drawn only)
   w.travelled = Math.min(w.dist, w.travelled + CFG.webSpeed * dt);
   if (w.travelled < w.dist) return;
   g.web = null;
@@ -140,7 +146,7 @@ export function stepGame(g, dt, actions) {
           ph.pendingTrick = null; ph.startPhase = 'play'; p.headingYaw = 0;
           startMove(ph, null, travelBasis(p));
         }
-        ph.flightPressed = true; ph.flight.step(0, { pressed: true }); // the chain stops before any solve
+        ph.flightPressed = true; ph.flight?.step(0, { pressed: true }); // the chain stops before any solve
         fire(g, a);
       } else if (a.type === 'release') {
         g.web = null;
@@ -157,6 +163,7 @@ export function stepGame(g, dt, actions) {
       }
     }
     p.mode = g.pose;
+    ph.webOut = !!g.web;
     const before = { ...p.pos }, pivot = p.ropePoints.at(-1) ?? p.anchor;
     events.push(...stepPhysics(g.phys, p, dt));
     const h = heading(g.street);
@@ -224,7 +231,7 @@ const facesBack = (g, q) => {
 // turn ('L' | 'R' | 'alt', ?autoturn): at each intersection web the near corner tower on that side, hold the swing
 // round the corner until the street switches (or 3 s), then let go and carry on down the cross street.
 const TURN_LEVELS = ['lo', 'mid'];
-export function createBot({ zip = false, turn = null } = {}) {
+export function createBot({ zip = false, turn = null, freeSec = CFG.botWaitSec } = {}) {
   let wait = 0, held = false, zipped = null, turning = null, turns = 0;
   const inside = (q, s) => ['x', 'y', 'z'].every((k) => q[k] >= s.min[k] - 0.05 && q[k] <= s.max[k] + 0.05);
   return (g, dt) => {
@@ -263,7 +270,7 @@ export function createBot({ zip = false, turn = null } = {}) {
     }
     if (held && g.web) return []; // web still flying
     if (held) { held = false; wait = 0; return [{ type: 'release' }]; } // missed: let go, retry
-    if ((wait += dt) < CFG.botWaitSec) return [];
+    if ((wait += dt) < freeSec) return []; // (freeSec: free flight between ropes; longer shows the flight chain)
     let best = null, bestScore = -Infinity;
     for (const side of ['L', 'R', 'C']) {
       for (const level of ['hi', 'mid', 'lo']) {

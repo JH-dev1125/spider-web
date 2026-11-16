@@ -93,7 +93,7 @@ test('swinging back unwraps', () => {
   for (let i = 0; i < 120 && !g.player.ropePoints.length; i++) stepGame(g, DT, []);
   assert.equal(g.player.ropePoints.length, 1);
   for (let i = 0; i < 4; i++) stepGame(g, DT, []);
-  for (const b of Object.values(g.phys.rag.bodies)) b.velocity.scale(-1, b.velocity); // swing back the way he came
+  g.phys.hero.velocity.scale(-1, g.phys.hero.velocity); // swing back the way he came
   let i = 0;
   for (; i < 120 && g.player.ropePoints.length; i++) stepGame(g, DT, []);
   assert.equal(g.player.ropePoints.length, 0, 'still wrapped');
@@ -112,13 +112,13 @@ test('more bends than ropeMaxWraps snap the rope: snapped event, rope gone, show
   assert.deepEqual(g.player.ropePoints, []);
   assert.ok(g.missLine, 'the snap is shown');
   assert.equal(g.phys.rope, null);
-  assert.equal(g.phys.world.constraints.length, g.phys.rag.joints.length); // only the ragdoll's joints remain
+  assert.equal(g.phys.world.constraints.length, 0); // no rope remains
 });
 
 test('bot runs on the generated city: no rope ever passes through a box at the end of a frame', () => {
   let wrapped = 0;
   for (let seed = 1; seed <= 12; seed++) for (const turn of [null, 'R']) {
-    const g = createGame(seed), bot = createBot({ turn });
+    const g = createGame(seed, { rig: false }), bot = createBot({ turn });
     for (let i = 0; i < 60 * 25 && g.player.alive; i++) {
       stepGame(g, DT, bot(g, DT));
       const p = g.player;
