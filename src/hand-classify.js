@@ -43,10 +43,16 @@ export const palmCenter = (lms) => {
   return { x: ids.reduce((a, i) => a + lms[i].x, 0) / 5, y: ids.reduce((a, i) => a + lms[i].y, 0) / 5 };
 };
 
+// Optional calibrated classifier (hand-calibrate.js makeOverride): (points, ruleGesture) -> gesture.
+// null = the angle rules alone. Module-level so every caller of classifyHand picks it up unchanged.
+let gestureOverride = null;
+export const setGestureOverride = (fn) => { gestureOverride = fn; };
+
 export function classifyHand(lms, handedness, { world, prev } = {}) {
   const c = palmCenter(lms);
   const bends = fingerBends(world ?? lms);
-  const gesture = gestureFromBends(bends, prev);
+  const rule = gestureFromBends(bends, prev);
+  const gesture = gestureOverride ? gestureOverride(world ?? lms, rule) : rule;
   const [hi, mid] = CFG.handLevelCuts;
   return { gesture, bends, side: c.x < 0.5 ? 'L' : 'R', level: c.y < hi ? 'hi' : c.y < mid ? 'mid' : 'lo' };
 }

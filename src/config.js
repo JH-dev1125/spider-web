@@ -113,7 +113,11 @@ export const CFG = deepFreeze({
   handFistDeg: 90, // 'fist': all four bend above this
   handHoldSlackDeg: 35, // while holding a web, index/pinky may bend this much past handExtendDeg before it lets go
   handHystDeg: 10, // the gesture held last frame gets its thresholds loosened by this much
-  handMinConfidence: 0.35, // MediaPipe detection / presence / tracking confidence (default 0.5)
+  handDetectConf: 0.5, // MediaPipe palm detection: a new hand needs this (default 0.5; fewer ghost palms)
+  handPresenceConf: 0.6, // landmark model's "a hand is really there": high, so a blurred ghost is dropped
+  handTrackConf: 0.3, // below this the next frame re-runs palm detection: low = less re-detect churn and jumps
+  handDetectMaxW: 1280, // model input width cap; a wider camera frame is scaled down to this first
+  handDarkLuma: 0.18, // mean frame brightness (0..1) below this = the "too dark" warning
   handLostMs: 300, // hand unseen this long while charging = cancel
   handLevelCuts: [1 / 3, 2 / 3], // palm-centre y (0 = top) below these: hi, mid; else lo
   handPromptTimeoutSec: 15, // camera permission prompt nobody answers = give up (hand 'failed', H retries)
