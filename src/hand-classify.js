@@ -81,28 +81,37 @@ export function createGestureGate(frames) {
 // Drives the shared aim tracker from per-frame hand results. update(hands, t):
 // hands = [{landmarks (mirrored), world?, handedness?}], t in seconds. The hold gesture is opts.mode.
 // opts.onShot gets the keyboard's actions: {type:'press', side, level} when a hand enters the gesture,
-// {type:'release', ...} when the aiming hand leaves it or is lost (lets go of the rope).
+// {type:'release', side, ...} when that hand leaves it or is lost (lets go of its own rope only).
 // Hands are matched to the previous frame's by wrist distance (up to CFG.handMatchMaxDist; farther is
-// a new hand). With two hands, the one that entered the charge gesture most recently owns the aim
-// (like the keyboard's last-pressed key); the other's release does nothing.
+// a new hand). Each hand drives the slot of the screen half it was in when it entered the gesture (left half = 'L',
+// right half = 'R'), so two hands in the pose hold two ropes, like Q and E held together. A hand that presses a slot
+// another hand owns replaces that slot's rope (like a second key on the same side); the superseded hand's release
+// then does nothing.
 // Charging is judged on the RAW gesture: CFG.handStableFrames charge frames in a row press,
 // CFG.handReleaseFrames non-charge frames in a row release, so a flickering none/open cannot hold the release back.
 // The status gesture is the mode exactly while charging, so the HUD never shows it without a press sent.
 // If someone else clears the tracker while a hand still charges (the game calls tracker.cancel() on start and
 // on death, and drops presses outside play), the press is sent again: a gesture held through the start fires.
 // update([], t) with no detection only ages hands out, so it can run on frames without a new image.
-// Zip: while the aiming hand holds the gesture, its apparent size (handSize) dropping by CFG.handZipShrink within
+// Zip: while a slot-owning hand holds the gesture, its apparent size (handSize) dropping by CFG.handZipShrink within
 // CFG.handZipWindowMs (the hand pulled toward the body) sends {type:'zip'} once, then waits CFG.handZipCooldownMs.
 // Size, not wrist motion: it is scale-free and independent of where the hand is, while a downward wrist move
 // would fight the level (wrist height) the user aims with. status.zip is true during the cooldown (HUD 당기기!).
 export function createHandController(tracker, { mode = 'shoot', onShot = () => {} } = {}) {
-  let slots = []; // {wrist, gate, stable, cur: classification, prev, seen, charging, on, run}
-  let active = null, zipAt = -Infinity;
-  const press = (s, t) => {
-    tracker.press(s.cur.side, s.cur.level, t);
-    active = s;
+  let slots = []; // {wrist, gate, stable, cur: classification, prev, seen, charging, on, run, side}
+  const owner = { L: null, R: null }; // the hand holding each rope slot
+  let last = null, zipAt = -Infinity; // last = the hand that pressed most recently (shown in the HUD)
+  const press = (s, t, side = s.cur.side) => {
+    tracker.press(side, s.cur.level, t);
+    owner[side] = last = s;
+    s.side = side;
     s.sizes = [];
-    onShot({ type: 'press', side: s.cur.side, level: s.cur.level });
+    onShot({ type: 'press', side, level: s.cur.level });
+  };
+  const owns = (s) => s.side && owner[s.side] === s;
+  const letGo = (s, t) => { // s owns its slot
+    owner[s.side] = null;
+    onShot({ type: 'release', ...(tracker.release(s.side, null, t) ?? { side: s.side }) });
   };
   return { update(hands, t) {
     const pairs = [];
@@ -126,9 +135,9 @@ export function createHandController(tracker, { mode = 'shoot', onShot = () => {
       if (on !== s.charging && s.run >= (on ? CFG.handStableFrames : CFG.handReleaseFrames)) {
         s.charging = on;
         if (on) press(s, t);
-        else if (s === active) { active = null; onShot({ type: 'release', ...tracker.release(null, null, t) }); }
+        else if (owns(s)) letGo(s, t);
       }
-      if (s === active && s.charging) {
+      if (owns(s) && s.charging) {
         const size = handSize(h.landmarks), win = CFG.handZipWindowMs / 1000;
         s.sizes = s.sizes.filter((e) => t - e.t <= win);
         const peak = Math.max(size, ...s.sizes.map((e) => e.size));
@@ -141,11 +150,15 @@ export function createHandController(tracker, { mode = 'shoot', onShot = () => {
     });
     slots = slots.filter((s) => {
       if (t - s.seen <= CFG.handLostMs / 1000) return true; // ms -> s
-      if (s === active) { active = null; tracker.cancel(); onShot({ type: 'release' }); }
+      if (owns(s)) letGo(s, t);
+      if (s === last) last = null;
       return false;
     });
-    if (active && !tracker.state(t)) press(active, t); // tracker cleared under a held gesture: press again
-    const shown = active || slots[0];
+    for (const side of ['L', 'R']) { // tracker cleared under a held gesture: press again, same slot
+      const s = owner[side];
+      if (s && !tracker.state(t, side)) press(s, t, side);
+    }
+    const shown = (last && owns(last) ? last : owner.L || owner.R) || slots[0];
     return {
       hands: slots.length,
       gesture: !shown ? 'none' : shown.charging ? mode : shown.stable === mode ? 'none' : shown.stable,

@@ -43,7 +43,7 @@ function circling(speed = 25, reel = false) {
   stepGame(g, DT, []);
   placeHero(g.phys, g.player, { x: -10, y: 60, z: 31 }, { x: 0, y: 0, z: speed });
   assert.ok(attach(g.phys, g.player, { x: 5, y: 60, z: 31 }));
-  if (!reel) g.player.ropeMin = Infinity; // no reeling: the rope's whole length must stay exactly the same
+  if (!reel) g.phys.slots[g.player.webSide].ropeMin = Infinity; // no reeling: the rope's whole length must stay exactly the same
   return g;
 }
 

@@ -21,6 +21,7 @@ export const createPlayer = () => ({
   ropePoints: [], // rope bends, anchor end first (see rope.js); the rope pivots on the last one
   ropeLen: 0, // the free length: pivot to hero
   ropeMin: 0,
+  ropes: [], // every held rope (one per hand slot): [{slot, anchor, len, tension}]; anchor/ropePoints above = the latest
   swingPhase: 'none', // 'none' | 'descending' | 'ascending' (past the swing bottom)
   sawDescent: false,
   wall: 0, // wall-running: the face's outward normal along the street's lateral axis (world sign), else 0
@@ -55,7 +56,7 @@ export function createPhysics(p, { rig = true, seed = 1 } = {}) {
   world.addBody(hero);
   const anchor = new CANNON.Body({ mass: 0, collisionFilterGroup: 0, collisionFilterMask: 0 }); // rope end point
   world.addBody(anchor);
-  const ph = { world, hero, anchor, rope: null, reelRate: 0, boxes: new Map(), acc: 0, bounced: false,
+  const ph = { world, hero, anchor, rope: null, slots: { L: null, R: null }, ropeSeq: 0, boxes: new Map(), acc: 0, bounced: false,
     wall: null, wallCool: 0, webSide: 'R', zipKick: null, zipCooldown: 0, landing: null, cornerRope: false,
     startPhase: 'play', load: 0, prevVel: hero.velocity.clone(), climb: null, perch: null, vault: false, roofSec: 0,
     street: makeStreet('z', 0, 1, 0), // the street frame game.js keeps current: wall runs and roof runs go along it
@@ -122,41 +123,61 @@ export function isTurnAnchor(ph, point, id) {
   return short >= 0 && short <= CFG.turnReach;
 }
 
-// Returns false (miss) for anchors too close to swing on. Replaces a held rope. The rope holds the core.
-// side: the shooting hand ('L' | 'R'; the follower's gripping hand); without one, the anchor's side of the heading.
+// Ropes: one per hand slot ('L' | 'R'), each a pull-only DistanceConstraint from the CORE to its own static anchor
+// body, with its own reel and its own wrapping (rope.js). Both pull at once: the solver adds their tensions. The most
+// recent rope is the 'latest': ph.rope / ph.anchor / ph.webSide / p.anchor / p.ropePoints / p.ropeLen mirror it (the
+// rig's grip, the camera and the bot read those); p.ropes lists them all.
+const latest = (ph) => [ph.slots.L, ph.slots.R].filter(Boolean).reduce((a, r) => (!a || r.seq > a.seq ? r : a), null);
+function syncRopes(ph, p) {
+  const r = latest(ph);
+  ph.rope = r?.rope ?? null; ph.cornerRope = !!r?.cornerRope;
+  if (r) { ph.anchor = r.body; ph.webSide = p.webSide = r.side; }
+  p.anchor = r?.anchor ?? null; p.ropePoints = r?.ropePoints ?? []; p.ropeLen = r?.ropeLen ?? 0; p.ropeMin = r?.ropeMin ?? 0;
+  p.ropes = ['L', 'R'].filter((k) => ph.slots[k]).map((k) => ({ slot: k, anchor: ph.slots[k].anchor, len: ph.slots[k].ropeLen,
+    tension: ropeTension(ph, k), ropePoints: ph.slots[k].ropePoints }));
+}
+// Newtons the rope pulled with in the last solve (cannon stores lambda / dt; pulling is negative).
+export const ropeTension = (ph, slot) => Math.max(0, -(ph.slots[slot]?.rope.distanceEquation.multiplier ?? 0));
+
+// Returns false (miss) for anchors too close to swing on; a miss keeps the held rope. Replaces that slot's rope only.
+// side: the shooting hand's slot ('L' | 'R'); without one, the hand on the anchor's side of the street heading.
+// id: the structure it stuck to (optional).
 export function attach(ph, p, point, side, id) {
   const rt = right(ph.street), q = ph.hero.position;
-  ph.webSide = side === 'L' || side === 'R' ? side : (point.x - q.x) * rt.x + (point.z - q.z) * rt.z < 0 ? 'L' : 'R';
-  p.webSide = ph.webSide;
+  const slot = side === 'L' || side === 'R' ? side : (point.x - q.x) * rt.x + (point.z - q.z) * rt.z < 0 ? 'L' : 'R';
   const len = q.distanceTo(new CANNON.Vec3(point.x, point.y, point.z));
   if (len < CFG.minRopeLen) return false;
-  if (ph.rope) ph.world.removeConstraint(ph.rope);
-  ph.anchor.position.set(point.x, point.y, point.z);
-  ph.rope = new CANNON.DistanceConstraint(ph.hero, ph.anchor, len, CFG.ropeMaxForce);
-  const eq = ph.rope.distanceEquation;
+  dropSlot(ph, slot);
+  const body = new CANNON.Body({ mass: 0, collisionFilterGroup: 0, collisionFilterMask: 0, position: new CANNON.Vec3(point.x, point.y, point.z) });
+  ph.world.addBody(body);
+  const rope = new CANNON.DistanceConstraint(ph.hero, body, len, CFG.ropeMaxForce);
+  const eq = rope.distanceEquation;
   eq.maxForce = 0; // a rope pulls, never pushes: slack when shorter than its length
   eq.setSpookParams(CFG.ropeStiffness, CFG.ropeRelaxation, CFG.physicsStep); // the default assumes a 1/60 s step
-  ph.world.addConstraint(ph.rope);
-  ph.reelRate = 0;
-  ph.cornerRope = isTurnAnchor(ph, point, id);
-  p.anchor = { ...point };
-  p.ropePoints = [];
-  p.ropeLen = len; // the full length: reeling starts from here, so attaching never yanks the hero
-  p.ropeMin = len * CFG.reelMinFactor;
+  ph.world.addConstraint(rope);
+  // ropeLen: the full length, so attaching never yanks the hero; reeling starts from here
+  ph.slots[slot] = { side: slot, rope, body, anchor: { ...point }, ropePoints: [], ropeLen: len, ropeMin: len * CFG.reelMinFactor,
+    reelRate: 0, cornerRope: isTurnAnchor(ph, point, id), seq: ++ph.ropeSeq };
   p.swingPhase = 'descending';
   p.sawDescent = false;
+  syncRopes(ph, p);
   return true;
 }
 
-// Let go: remove the constraint. Nothing touches the velocity. Returns true if a rope was attached.
-export function release(ph, p) {
-  if (!ph.rope) return false;
-  ph.world.removeConstraint(ph.rope);
-  ph.rope = null;
-  p.anchor = null;
-  p.ropePoints = [];
-  p.ropeLen = 0;
-  p.swingPhase = 'none';
+function dropSlot(ph, slot) {
+  const r = ph.slots[slot];
+  if (!r) return false;
+  ph.world.removeConstraint(r.rope); ph.world.removeBody(r.body);
+  ph.slots[slot] = null;
+  return true;
+}
+
+// Let go of one slot's rope (slot omitted: every rope). Nothing touches the velocity. Returns true if a rope let go.
+export function release(ph, p, slot) {
+  const gone = slot === 'L' || slot === 'R' ? dropSlot(ph, slot) : [dropSlot(ph, 'L'), dropSlot(ph, 'R')].some(Boolean);
+  if (!gone) return false;
+  syncRopes(ph, p);
+  if (!ph.rope) p.swingPhase = 'none';
   return true;
 }
 
@@ -186,9 +207,12 @@ export function launchZip(ph, p) {
   const v = ph.hero.velocity, basis = travelBasis(p);
   const facing = basis.vmult(new CANNON.Vec3(0, 0, 1));
   const head = Math.hypot(v.x, v.z) > .1 ? { x: v.x, y: 0, z: v.z } : facing;
-  const rd = ph.anchor.position.vsub(ph.hero.position);
+  // two ropes: launch along the sum of the rope unit vectors (each toward its own pivot)
+  const rd = [ph.slots.L, ph.slots.R].filter(Boolean).reduce((sum, r) => {
+    const u = r.body.position.vsub(ph.hero.position); u.normalize(); return sum.vadd(u);
+  }, new CANNON.Vec3());
   const { dv } = zipLaunch({ x: v.x, y: v.y, z: v.z }, head, { x: rd.x, y: rd.y, z: rd.z }, CFG);
-  ph.zipFrom = { x: ph.anchor.position.x, y: ph.anchor.position.y, z: ph.anchor.position.z, sec: 0, rise: rd.y }; // (a climb cue)
+  ph.zipFrom = { x: ph.anchor.position.x, y: ph.anchor.position.y, z: ph.anchor.position.z, sec: 0, rise: ph.anchor.position.y - ph.hero.position.y }; // (a climb cue)
   release(ph, p);
   ph.pendingTrick = null;
   ph.zipCooldown = CFG.zipCooldownSec;
@@ -350,15 +374,16 @@ function coreStep(ph, p, events) {
     const a = steerAccel(v, heading(ph.street));
     hero.force.x += CFG.heroMass * a.x; hero.force.z += CFG.heroMass * a.z;
   }
-  if (ph.rope) {
-    let len = ph.rope.distance;
-    const d = hero.position.distanceTo(ph.anchor.position);
+  for (const r of [ph.slots.L, ph.slots.R]) {
+    if (!r) continue;
+    let len = r.rope.distance;
+    const d = hero.position.distanceTo(r.body.position);
     // the reel spins up under tension (a sudden full-speed reel would jerk the hero), stops when slack
-    ph.reelRate = d >= len - 1e-3 ? Math.min(CFG.reelSpeed, ph.reelRate + CFG.reelAccel * h) : 0;
+    r.reelRate = d >= len - 1e-3 ? Math.min(CFG.reelSpeed, r.reelRate + CFG.reelAccel * h) : 0;
     if (d < len) len = Math.max(CFG.minRopeLen, d); // take up slack (no force: it never moves the hero)
     // reel in under tension (not round a corner tower: the full length carries him past its edge)
-    if (len > p.ropeMin && !ph.cornerRope && !ph.wall) len = Math.max(p.ropeMin, len - ph.reelRate * h);
-    ph.rope.distance = p.ropeLen = len;
+    if (len > r.ropeMin && !r.cornerRope && !ph.wall) len = Math.max(r.ropeMin, len - r.reelRate * h);
+    r.rope.distance = r.ropeLen = len;
   }
   const P0 = { x: hero.position.x, y: hero.position.y, z: hero.position.z };
   ph.world.step(h);
@@ -366,7 +391,13 @@ function coreStep(ph, p, events) {
   else if (ph.vault && !p.roof) vaultStep(ph);
   else wallStep(ph, p, v0, events);
   if (ph.bound && !idle) boundStep(ph);
-  if (ph.rope && !ropeStep(ph, p, P0, STRUCT)) { release(ph, p); events.push('snapped'); } // can't bend around it
+  for (const k of ['L', 'R']) { // each rope wraps on its own (rope.js reads a rope through these two views)
+    const r = ph.slots[k];
+    if (r && !ropeStep({ rope: r.rope, anchor: r.body, boxes: ph.boxes, hero: ph.hero, world: ph.world }, r, P0, STRUCT)) {
+      release(ph, p, k); events.push('snapped'); // can't bend around it
+    }
+  }
+  syncRopes(ph, p);
   // The rope's tension (for the follower's strain pose): T = M (|v|^2 - (v.u)^2) / L + M g (-u_y), u = pivot -> hero.
   let tension = 0;
   if (ph.rope) {

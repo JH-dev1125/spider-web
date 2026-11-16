@@ -52,7 +52,9 @@ export function createGame(seed, { start = 'air', rig = true } = {}) {
     pose: 'glide',
     trickSec: 0,
     missLine: null,
-    web: null, // web in flight: {from, to, dist, travelled, hit}
+    web: null, // the latest web in flight: {side, slot, from, to, dist, travelled, hit} (the renderer draws it)
+    webs: { L: null, R: null }, // the web in flight per hand slot (Q and E together: two webs, two ropes)
+    cSlot: null, // the slot the last W (side 'C') press went to: its key-up lets go of that rope
     shake: 0,
     street: makeStreet('z', 0, 1, 0),
     distance: 0,
@@ -105,22 +107,41 @@ export function aim(g, side, level) {
   return { from, to, hit: !!r?.attach, id: r?.id ?? null };
 }
 
-// A press launches a web from the hand. The target is cast now (structures are static); it lands after
-// dist / webSpeed seconds. A held rope stays until the new web lands (last pressed wins on arrival).
-function fire(g, s) {
-  const { from, to, hit, id } = aim(g, s.side, s.level);
-  g.web = { side: s.side, from, to, dist: Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z), travelled: 0, hit, id };
+// The hand slot a press goes to: L and R are their own hands; W (side 'C') takes a free hand, and with both busy
+// replaces the older rope.
+function slotFor(g, side) {
+  if (side === 'L' || side === 'R') return side;
+  const s = g.phys.slots, free = ['R', 'L'].find((k) => !s[k] && !g.webs[k]);
+  return free ?? ((s.L?.seq ?? 0) < (s.R?.seq ?? 0) ? 'L' : 'R');
+}
+const latestWeb = (g) => g.webs.L && g.webs.R ? (g.webs.L.t > g.webs.R.t ? g.webs.L : g.webs.R) : g.webs.L || g.webs.R;
+function cancelWebs(g, slot) {
+  if (slot) g.webs[slot] = null; else g.webs.L = g.webs.R = null;
+  g.web = latestWeb(g);
 }
 
-// Advance the web in flight; on arrival attach (key still held, or it would have been cancelled) or show a miss.
-function flyWeb(g, dt) {
-  const w = g.web;
-  w.from = hand(g, w.side); // (drawn only)
-  w.travelled = Math.min(w.dist, w.travelled + CFG.webSpeed * dt);
-  if (w.travelled < w.dist) return;
-  g.web = null;
-  if (w.hit && attach(g.phys, g.player, w.to, w.side, w.id)) { g.missLine = null; return; }
-  g.missLine = { to: w.to, age: 0 };
+// A press launches a web from the hand. The target is cast now (structures are static); it lands after
+// dist / webSpeed seconds. That slot's held rope stays until the new web lands (last pressed wins on arrival).
+function fire(g, s) {
+  const slot = slotFor(g, s.side);
+  if (s.side === 'C') g.cSlot = slot;
+  const { from, to, hit, id } = aim(g, s.side, s.level);
+  g.web = g.webs[slot] = { side: s.side, slot, from, to, dist: Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z), travelled: 0, hit, id, t: g.elapsed };
+}
+
+// Advance the webs in flight; on arrival attach to their slot (key still held, or it would have been cancelled) or
+// show a miss.
+function flyWebs(g, dt) {
+  for (const k of ['L', 'R']) {
+    const w = g.webs[k];
+    if (!w) continue;
+    w.from = hand(g, k); // (drawn only)
+    w.travelled = Math.min(w.dist, w.travelled + CFG.webSpeed * dt);
+    if (w.travelled < w.dist) continue;
+    cancelWebs(g, k);
+    if (w.hit && attach(g.phys, g.player, w.to, k, w.id)) g.missLine = null;
+    else g.missLine = { to: w.to, age: 0 };
+  }
 }
 
 // actions: [{type: 'press', side, level} | {type: 'release'} | {type: 'zip'}]. A press launches a web (fixed range) and
@@ -150,16 +171,19 @@ export function stepGame(g, dt, actions) {
         ph.flightPressed = true; ph.flight?.step(0, { pressed: true }); // the chain stops before any solve
         fire(g, a);
       } else if (a.type === 'release') {
-        g.web = null;
-        if (release(ph, p)) {
+        // a side lets go of that hand's rope (W: the slot it went to); no side (blur, lost hand) lets go of all
+        const slot = a.side == null ? null : a.side === 'C' ? g.cSlot : a.side;
+        cancelWebs(g, slot);
+        const gone = release(ph, p, slot ?? undefined);
+        if (gone && !ph.rope) {
           // the release flourish; then the flight chain (ragdoll.js) runs until the next rope, wall, roof or preland
           ph.pendingTrick = null;
           startMove(ph, MOVES.release, travelBasis(p));
           ph.motion.mirror = p.webSide === 'L' ? -1 : 1;
           events.push('released');
-        }
+        } else if (gone) events.push('released'); // (one of two: he swings on the other)
       } else if (a.type === 'zip' && launchZip(ph, p)) {
-        g.web = null; events.push('released', 'zipped');
+        cancelWebs(g); events.push('released', 'zipped');
         g.shake = Math.max(g.shake, CFG.render.shakePeak);
       }
     }
@@ -171,13 +195,13 @@ export function stepGame(g, dt, actions) {
     g.distance += (p.pos.x - before.x) * h.x + (p.pos.z - before.z) * h.z;
     if (p.alive && updateStreet(g)) events.push('turned');
     if (events.includes('snapped')) g.missLine = { to: { ...pivot }, age: 0 };
-    if (g.web && p.alive) flyWeb(g, dt);
+    if (g.web && p.alive) flyWebs(g, dt);
     p.sinceRelease = p.anchor ? Infinity : events.includes('released') ? 0 : (p.sinceRelease ?? Infinity) + dt; // (camera: big air)
     if (events.includes('bottom')) g.shake = CFG.render.shakePeak;
     if (events.includes('landingImpact')) g.shake = CFG.render.shakePeak; // (dust and the camera dip: render.js)
     if (events.includes('bounce')) g.shake = Math.max(g.shake, CFG.render.bounceShake);
     if (events.includes('walljump')) { g.pose = 'walljump'; g.trickSec = CFG.trickSec; }
-  } else { g.web = null; stepPhysics(g.phys, p, dt); }
+  } else { cancelWebs(g); stepPhysics(g.phys, p, dt); }
   g.trickSec = Math.max(0, g.trickSec - dt);
   const move = g.phys.motion?.move;
   if (!p.alive) g.pose = 'landing';
@@ -236,7 +260,8 @@ const facesBack = (g, q) => {
 // turn ('L' | 'R' | 'alt', ?autoturn): at each intersection web the near corner tower on that side, hold the swing
 // round the corner until the street switches (or 3 s), then let go and carry on down the cross street.
 const TURN_LEVELS = ['lo', 'mid'];
-export function createBot({ zip = false, turn = null, freeSec = CFG.botWaitSec } = {}) {
+// dual (?dualrope): press the best aim on EACH side, two ropes at once (and let go of both together).
+export function createBot({ zip = false, turn = null, freeSec = CFG.botWaitSec, dual = false } = {}) {
   let wait = 0, held = false, zipped = null, turning = null, turns = 0;
   const inside = (q, s) => ['x', 'y', 'z'].every((k) => q[k] >= s.min[k] - 0.05 && q[k] <= s.max[k] + 0.05);
   return (g, dt) => {
@@ -246,6 +271,8 @@ export function createBot({ zip = false, turn = null, freeSec = CFG.botWaitSec }
     if (g.phys.startPhase === 'dive' && p.pos.y > CFG.dive.botCatchY) return []; // dives, then webs out of it low
     if (turning) {
       if (held && g.web) return [];
+      // the corner web has landed beside a rope in the other hand: let go of that one (one rope round the corner)
+      if (p.ropes.length === 2) return [{ type: 'release', side: turning.side === 'L' ? 'R' : 'L' }];
       turning.sec += dt;
       if (p.anchor && g.street === turning.street && turning.sec < 3) return [];
       if (g.street !== turning.street) turns++;
@@ -260,7 +287,7 @@ export function createBot({ zip = false, turn = null, freeSec = CFG.botWaitSec }
           const a = aim(g, side, level), short = edge - (toLocal(g.street, a.to).z - toLocal(g.street, p.pos).z);
           // anchored within turnReach of the edge, he passes beside it at the edge and circles round it
           if (a.hit && inside(a.to, c.tower) && short >= 0 && short <= CFG.turnReach) {
-            turning = { street: g.street, sec: 0 }; held = true;
+            turning = { street: g.street, sec: 0, side }; held = true;
             return [{ type: 'press', side, level }];
           }
         }
@@ -278,6 +305,7 @@ export function createBot({ zip = false, turn = null, freeSec = CFG.botWaitSec }
     if (held) { held = false; wait = 0; return [{ type: 'release' }]; } // missed: let go, retry
     if ((wait += dt) < freeSec) return []; // (freeSec: free flight between ropes; longer shows the flight chain)
     let best = null, bestScore = -Infinity;
+    const perSide = {};
     for (const side of ['L', 'R', 'C']) {
       for (const level of ['hi', 'mid', 'lo']) {
         const a = aim(g, side, level);
@@ -286,11 +314,14 @@ export function createBot({ zip = false, turn = null, freeSec = CFG.botWaitSec }
         // swing bottom after reeling, minus a penalty for already drifting toward that wall
         const lat = toLocal(g.street, a.to).x, latV = toLocalVec(g.street, p.vel).x;
         const score = a.to.y - len * CFG.reelMinFactor - 3 * Math.max(0, Math.sign(lat) * latV) + (Math.sign(lat) === Math.sign(toLocal(g.street, p.pos).x) ? 3 : 0);
-        if (len >= CFG.botRopeMin && len <= CFG.botRopeMax && score > bestScore) { bestScore = score; best = { type: 'press', side, level }; }
+        if (len < CFG.botRopeMin || len > CFG.botRopeMax) continue;
+        if (score > bestScore) { bestScore = score; best = { type: 'press', side, level }; }
+        if (side !== 'C' && score > (perSide[side]?.score ?? -Infinity)) perSide[side] = { score, press: { type: 'press', side, level } };
       }
     }
     if (!best) return [];
     held = true;
+    if (dual && perSide.L && perSide.R) return [perSide.L.press, perSide.R.press];
     return [best];
   };
 }

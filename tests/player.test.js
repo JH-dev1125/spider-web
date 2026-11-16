@@ -72,7 +72,8 @@ test('the rope only ever shortens: reeled smoothly to ropeMin (slack take-up may
   for (let i = 0; i < 60 * 8; i++) {
     stepPhysics(ph, p, DT);
     assert.ok(p.ropeLen <= prev + 1e-9 && p.ropeLen >= CFG.minRopeLen);
-    assert.ok(ph.reelRate <= CFG.reelSpeed && ph.reelRate >= 0, 'winch speed bounded; slack take-up can be faster');
+    const rate = ph.slots[p.webSide]?.reelRate ?? 0;
+    assert.ok(rate <= CFG.reelSpeed && rate >= 0, 'winch speed bounded; slack take-up can be faster');
     prev = p.ropeLen;
   }
   assert.ok(p.ropeLen <= p.ropeMin + 1e-9);

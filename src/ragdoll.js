@@ -175,8 +175,10 @@ export function driveRagdoll(ph, p, h, impulse, angularImpulse) {
     if (isWeb) {
       // Both hands on the line above his head (the shooting hand on top, the other 0.12 m below it): two-link reach
       // with the elbows out and back (rig.js gripForces holds the hands there; the rope is drawn from them).
-      const u = ph.anchor.position.vsub(b.pelvis.position); u.normalize();
-      const goal = b.pelvis.position.vadd(u.scale(CFG.rig.gripReach - (side === ph.webSide ? 0 : .12)));
+      // two ropes: each hand holds its own (the shoulder's side of the pelvis toward that rope's pivot)
+      const own = ph.slots?.L && ph.slots?.R ? ph.slots[side].body.position : null;
+      const u = (own ?? ph.anchor.position).vsub(b.pelvis.position); u.normalize();
+      const goal = b.pelvis.position.vadd(u.scale(CFG.rig.gripReach - (own || side === ph.webSide ? 0 : .12)));
       armTargets(b, t, side, goal);
     } else if (ph.climb) { // hand over hand up the glass, opposite to the stride
       const s = Math.sin((r.time / .36 + (side === 'R' ? .5 : 0)) * 2 * Math.PI), q = new C.Quaternion();

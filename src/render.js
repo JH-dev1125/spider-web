@@ -519,6 +519,10 @@ export function createRenderer(canvas) {
     new THREE.MeshBasicMaterial({ map: splatTexture(), transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }));
   scene.add(splat);
   let anchorKey = '', flashAge = 1;
+  // the second held rope (two hands, two ropes): its own strands and splat, from its own hand
+  const ropes2 = Array.from({ length: CFG.ropeMaxWraps + 1 }, () => strand(1)), splat2 = splat.clone(), vHand2 = new THREE.Vector3();
+  const vAnchor2 = new THREE.Vector3(), normal2 = new THREE.Vector3();
+  scene.add(splat2);
   const normal = new THREE.Vector3(), FORWARD = new THREE.Vector3(0, 0, 1);
 
   // ---- speed lines: thin streaks in camera space, flying past ----
@@ -612,6 +616,19 @@ export function createRenderer(canvas) {
       for (let k = bends.length - 1; k >= 0; k--, n++) { const v = set3(vBends[n], bends[k]); segment(ropes[n], from, v); from = v; }
       segment(ropes[n], from, anchor);
       splat.position.copy(anchor).addScaledVector(normal, R.decalLift);
+    }
+    const other = p.ropes?.find((r) => r.anchor !== p.anchor);
+    for (const m of ropes2) m.visible = false;
+    splat2.visible = !!other;
+    if (other) {
+      const h2 = p.ragdoll?.['hand' + other.slot]?.position ?? p.pos;
+      let from = vHand2.set(h2.x, h2.y, -h2.z), n = 0;
+      for (let k = other.ropePoints.length - 1; k >= 0; k--, n++) { const v = set3(vBends[n], other.ropePoints[k]); segment(ropes2[n], from, v); from = v.clone(); }
+      const a2 = set3(vAnchor2, other.anchor);
+      segment(ropes2[n], from, a2);
+      set3(normal2, surfaceNormal(other.anchor, view.structures));
+      splat2.quaternion.setFromUnitVectors(FORWARD, normal2);
+      splat2.position.copy(a2).addScaledVector(normal2, R.decalLift);
     }
     flashAge += dt;
     flash.visible = flashAge < 0.22;

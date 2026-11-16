@@ -36,7 +36,7 @@ resize();
 
 // Debug: ?autoplay starts at once with the bot; ?autoplay=<sec> stops the bot after <sec> so it dies;
 // ?t=<sec> fast-forwards (see the bottom); ?autozip makes the bot zip up its ropes; ?autoturn[=L|R|alt] makes it
-// turn at every intersection (alt: right, then left, ...); ?seed=<n> fixes the city.
+// turn at every intersection (alt: right, then left, ...); ?dualrope makes it hold two ropes; ?seed=<n> fixes the city.
 const q = new URLSearchParams(location.search);
 const autoplay = q.has('autoplay');
 const botSec = Number(q.get('autoplay')) || Infinity;
@@ -88,7 +88,7 @@ function start() {
   actions = [];
   tracker.cancel(); // a key held through death must not release anything on the first frame
   bot = autoplay ? createBot({ zip: q.has('autozip'), turn: q.has('autoturn') ? q.get('autoturn') || 'alt' : null,
-    freeSec: Number(q.get('free')) || undefined }) : null; // ?free=<sec>: fly that long between ropes (the flight chain, big air)
+    freeSec: Number(q.get('free')) || undefined, dual: q.has('dualrope') }) : null; // ?free=<sec>: fly that long between ropes (the flight chain, big air)
   mode = 'play';
 }
 

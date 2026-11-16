@@ -155,13 +155,14 @@ function liftTarget(ph, p) {
   return out;
 }
 
-// Both hands on the rope line, a hand's breadth apart (a bounded internal pair: hand against chest).
+// Both hands on the rope line, a hand's breadth apart (a bounded internal pair: hand against chest). Two ropes: each
+// hand on its own line.
 function gripForces(ph) {
-  const b = ph.rag.bodies, pivot = ph.anchor.position, core = ph.hero.position;
-  const u = pivot.vsub(core), L = u.length(); if (L < 1e-6) return; u.scale(1 / L, u);
+  const b = ph.rag.bodies, core = ph.hero.position, dual = ph.slots.L && ph.slots.R;
   const hands = ph.wall ? [ph.webSide] : [ph.webSide, ph.webSide === 'L' ? 'R' : 'L'];
   hands.forEach((side, i) => {
-    const hand = b['hand' + side], goal = core.vadd(u.scale(CFG.rig.gripReach - .12 * i));
+    const u = (dual ? ph.slots[side].body : ph.anchor).position.vsub(core), L = u.length(); if (L < 1e-6) return; u.scale(1 / L, u);
+    const hand = b['hand' + side], goal = core.vadd(u.scale(CFG.rig.gripReach - (dual ? 0 : .12 * i)));
     const F = goal.vsub(hand.position).scale(CFG.rig.gripK).vsub(hand.velocity.vsub(b.chest.velocity).scale(CFG.rig.gripC));
     const n = F.length(); if (n > CFG.rig.gripMax) F.scale(CFG.rig.gripMax / n, F);
     hand.applyForce(F); b.chest.applyForce(F.negate());

@@ -16,27 +16,31 @@ test('press/state/release basic', () => {
   assert.equal(tr.state(0.5), null);
 });
 
-test('simultaneous: replacement restarts charge; stale release ignored', () => {
+test('per side: L and R held together; a release lets go of its own side only', () => {
   const tr = createChargeTracker();
   tr.press('L', 'mid', 0); tr.press('R', 'lo', 0.2);
-  assert.equal(tr.release('L', 'mid', 0.3), null);
-  assert.equal(tr.state(0.3).side, 'R'); assert.equal(tr.state(0.3).level, 'lo');
+  assert.equal(tr.state(0.3).side, 'R', 'state() without a side = the most recent');
+  assert.equal(tr.state(0.3, 'L').level, 'mid');
+  near(tr.release('L', 'mid', 0.3).heldSec, 0.3);
+  assert.equal(tr.state(0.3, 'L'), null);
+  assert.equal(tr.state(0.3, 'R').level, 'lo');
   near(tr.release('R', 'lo', 0.5).heldSec, 0.3);
 });
 
-test('move keeps charge, release(null,null) fires current aim', () => {
+test('same side: a new press replaces that side; the superseded key is stale; release(null) lets go of all', () => {
   const tr = createChargeTracker();
-  tr.press('R', 'mid', 0); tr.move('L', 'hi');
-  near(tr.state(0.5).heldSec, 0.5);
+  tr.press('L', 'hi', 0); tr.press('R', 'mid', 0); tr.press('L', 'lo', 0.4);
+  assert.equal(tr.release('L', 'hi', 0.5), null);
+  near(tr.state(0.5, 'L').heldSec, 0.1);
   const r = tr.release(null, null, 0.6);
-  assert.equal(r.side, 'L'); assert.equal(r.level, 'hi'); near(r.heldSec, 0.6);
+  assert.deepEqual([r.side, r.level], ['L', 'lo']);
+  assert.equal(tr.state(0.6), null);
   assert.equal(tr.release(null, null, 0.7), null);
 });
 
 test('cancel and no-aim cases', () => {
   const tr = createChargeTracker();
   assert.equal(tr.release('L', 'hi', 0), null);
-  tr.move('L', 'hi'); // move without aim is a no-op
   assert.equal(tr.state(0), null);
   tr.press('L', 'hi', 0); tr.cancel();
   assert.equal(tr.release('L', 'hi', 1), null);
@@ -63,11 +67,18 @@ test('attachKeyboard: press fires at once, keyup of the active key releases, blu
   assert.equal(acts.length, 1);
   fire('keyup', 'KeyE'); assert.equal(tr.state(t), null);
   assert.deepEqual(acts[1], { type: 'release', side: 'R', level: 'hi', heldSec: 0.5 });
-  // last pressed wins: the superseded key's keyup does nothing
-  fire('keydown', 'KeyQ'); fire('keydown', 'KeyD'); fire('keyup', 'KeyQ');
-  assert.deepEqual(acts.slice(2).map((a) => a.type), ['press', 'press']);
-  fire('keyup', 'KeyD'); assert.equal(acts.at(-1).type, 'release');
-  fire('keydown', 'KeyZ'); target.dispatchEvent(new Event('blur'));
+  // Q and D held together: two presses; releasing Q lets go of L only
+  fire('keydown', 'KeyQ'); fire('keydown', 'KeyD');
+  assert.deepEqual(acts.slice(2), [{ type: 'press', side: 'L', level: 'hi' }, { type: 'press', side: 'R', level: 'mid' }]);
+  fire('keyup', 'KeyQ');
+  assert.deepEqual([acts.at(-1).type, acts.at(-1).side], ['release', 'L']);
+  assert.ok(tr.state(t, 'R'));
+  // same side: A replaces Q's slot, Q's keyup is then stale
+  fire('keydown', 'KeyQ'); fire('keydown', 'KeyA'); const n0 = acts.length; fire('keyup', 'KeyQ');
+  assert.equal(acts.length, n0);
+  fire('keyup', 'KeyD'); assert.deepEqual([acts.at(-1).type, acts.at(-1).side], ['release', 'R']);
+  fire('keyup', 'KeyA'); assert.deepEqual([acts.at(-1).type, acts.at(-1).side, acts.at(-1).level], ['release', 'L', 'mid']);
+  fire('keydown', 'KeyZ'); fire('keydown', 'KeyC'); target.dispatchEvent(new Event('blur'));
   assert.equal(tr.state(t), null);
   assert.deepEqual(acts.at(-1), { type: 'release' });
   const n = acts.length;
