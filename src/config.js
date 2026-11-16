@@ -17,12 +17,22 @@ export const CFG = deepFreeze({
   corridorHalfWidth: 14, // tower faces line x = +-14 (the street corridor)
   viewDistance: 260, // structures exist this far ahead of the hero
   behindDistance: 40, // and are removed this far behind
-  startHeight: 50,
+  startHeight: 55,
   startSpeed: 12, // m/s forward at the start: a gentle leap, not a launch
   baseSpeed: 22, // render speed-feel reference only (fov and speed lines start here)
   maxSpeed: 60, // render speed-feel reference only (fov and speed lines are full here)
-  aimAhead: 52, // m: every web meets its side's corridor face this far ahead of the hero (from the centre: yaw 15 deg)
-  aimPitchDeg: { hi: 14, mid: 0, lo: -30 }, // from the centre: hi = 55.5 m web rising 13.4 m (was 25 deg: +25 m, out of view), mid 54 m level, lo 62 m dropping 31 m
+  aimAhead: 40, // m: every web meets its side's corridor face this far ahead of the hero (from the centre: yaw 19 deg)
+  // High webs, as real swinging does: the rope is mostly up and forward, so its sideways pull is small next to the
+  // forward momentum and the pendulum's low point (under the anchor, at the wall) is never reached before the release.
+  // From the centre (42.4 m out to the face): hi rises 50 m (rope 12 deg out of the forward-vertical plane),
+  // mid 30 m (15 deg), lo 12 m (19 deg). (Was 52 m ahead, hi +13 m, mid level, lo -31 m: every swing ran into the wall.)
+  aimPitchDeg: { hi: 49.7, mid: 35.3, lo: 15.8 },
+  // body English while on the rope: the swinger leans and pulls to turn the swing plane toward the street heading
+  steer: {
+    turn: 0.6, // 1/s: turn rate per unit sin(angle off heading), applied perpendicular to the velocity (no work)
+    damp: 0.4, // 1/s: lateral velocity damping (only ever removes energy)
+    maxAccel: 2.5, // m/s^2 cap on the whole steering acceleration (muscle, not a motor)
+  },
   webRange: 135, // from beside one wall reaches the far wall
   webSpeed: 300, // m/s: a 54 m web lands in 0.18 s; a miss shows at full range after 0.45 s
   reelSpeed: 6, // (was 8: the reel pumped speed too fast; 4 starved the bot of height) m/s the held rope shortens at full reel (a hand-over-hand pull; the constraint turns it into tension)
@@ -49,14 +59,14 @@ export const CFG = deepFreeze({
     startZ: -20,
     easyZ: 400, // easy course before the difficulty ramp starts
     rampZ: 4000, // metres from easiest to hardest
-    goodH: 42, // a tower on the corridor face at least this tall is a "sure anchor" (mid from <= 42 m, hi from <= 28 m)
+    goodH: 70, // a tower on the corridor face at least this tall is a "sure anchor" (a mid web from flight height ~40 m lands on it)
     maxGapStart: 30, // longest z stretch with no sure anchor on either side, early..
     maxGapEnd: 70, // ..and late (a release at ~25 m/s carries > 100 m, so 70 m stays flyable)
     alleyStart: [0, 0.8], // empty z between lots: early seams are narrower than the hero (1 m), later alleys he can fall into
     alleyEnd: [2, 12],
     towerLen: [24, 70],
-    towerHStart: [60, 120],
-    towerHEnd: [42, 150],
+    towerHStart: [100, 160], // tall enough for the high webs: hi from the start height lands ~105 m up (was [60, 120])
+    towerHEnd: [70, 170], // the low end stays >= goodH: every tower is a sure anchor
     lowH: [12, 30],
     depth: [18, 34],
     sectionLen: [120, 320], // a stretch with buildings on both sides, or one side only
@@ -86,7 +96,7 @@ export const CFG = deepFreeze({
   overFallSec: 1, // death fall animation before the result screen
   overInputDelaySec: 0.3, // ignore Space/Enter right after dying so a held key can't skip the result
   botWaitSec: 0.1, // ?autoplay and the headless bot test: free flight before the next press
-  botReleaseClimb: 0.6, // let go past the swing bottom once climbing at 30 degrees (vel.y / speed)..
+  botReleaseClimb: 0.4, // let go past the swing bottom once climbing at 17 degrees (vel.y / speed), long before the anchor (was 0.6: held on until under the anchor, at the wall)..
   botStallSpeed: 6, // ..or once the swing has slowed below this
   botRopeMin: 20, // the bot skips ropes shorter (a wall it is next to) or longer (a slow, low swing) than these
   botRopeMax: 120,

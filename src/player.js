@@ -2,8 +2,10 @@
 import * as CANNON from '../vendor/cannon-es.js';
 import { CFG } from './config.js';
 import { makeRagdoll, driveRagdoll, ANATOMY } from './ragdoll.js';
+import { steerAccel } from './steer.js';
 
 const HERO = 1, STRUCT = 2, GROUND = 4;
+const STREET = { x: 0, z: 1 }; // the street heading (the course runs along +z)
 
 // The plain per-frame copy the game logic and the renderer read (see the contract in game.js).
 export const createPlayer = () => ({
@@ -148,6 +150,12 @@ function zipCheck(ph, p, events) {
     events.push('released', 'zipped');
   }
 }
+
+const comVelocity = (ph) => {
+  const v = { x: 0, y: 0, z: 0 }; let m = 0;
+  for (const b of Object.values(ph.rag.bodies)) { v.x += b.mass * b.velocity.x; v.y += b.mass * b.velocity.y; v.z += b.mass * b.velocity.z; m += b.mass; }
+  v.x /= m; v.y /= m; v.z /= m; return v;
+};
 
 // Whole-body impulses preserve a coherent velocity across the joint chain.
 function impulse(ph, dv) {
@@ -302,6 +310,12 @@ export function stepPhysics(ph, p, dt) {
       if (dist > 1e-6 && d.dot(v) / dist < CFG.zipMaxSpeed) {
         for (const b of Object.values(ph.rag.bodies)) b.force.vadd(d.scale(CFG.zipAccel * b.mass / dist), b.force);
       }
+    }
+    // body English (steer.js): the same acceleration on every body (force = its mass * a), so the whole rig turns
+    // as one and momentum stays physical (no internal joint load from a pelvis-only push).
+    if (ph.rope) {
+      const a = steerAccel(comVelocity(ph), STREET);
+      for (const b of Object.values(ph.rag.bodies)) { b.force.x += b.mass * a.x; b.force.z += b.mass * a.z; }
     }
     if (ph.rope) {
       let len = ph.rope.distance;
