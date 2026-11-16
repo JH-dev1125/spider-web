@@ -4,6 +4,7 @@ import { CFG } from '../src/config.js';
 import { createGame, stepGame, createBot, pickTrickPose } from '../src/game.js';
 import { setZip } from '../src/player.js';
 import { makeRng } from '../src/world.js';
+import { aimVector } from '../src/web.js';
 
 const DT = 1 / 60;
 const W = CFG.corridorHalfWidth;
@@ -199,11 +200,13 @@ test('webs: frames refuse them, the open middle lets them through, cranes and sk
   assert.ok(g.web.hit && Math.abs(g.web.to.x - W - 10) < 1e-6, 'through the frame onto the tower behind');
   const g2 = createGame(1);
   const y = g2.player.pos.y + CFG.render.playerHand;
-  course(g2, [block('B1:bridge', 'bridge', { x: -W - 2, y: y + 8, z: 40 }, { x: W + 2, y: y + 13, z: 45 })]);
+  const hi = aimVector('R', 'hi', 0), yb = y + hi.y * (40 / hi.z); // where the hi web crosses z = 40
+  course(g2, [block('B1:bridge', 'bridge', { x: -W - 2, y: yb - 2, z: 40 }, { x: W + 2, y: yb + 3, z: 45 })]);
   stepGame(g2, DT, [shot('R', 'hi')]);
   assert.ok(g2.web.hit && Math.abs(g2.web.to.z - 40) < 1e-6, 'hi web sticks to the skybridge');
   const g3 = createGame(1);
-  course(g3, [block('C1:mast', 'crane', { x: 17, y: 0, z: 62 }, { x: 20, y: 90, z: 66 })]);
+  const mid = aimVector('R', 'mid', 0), zm = 17 * mid.z / mid.x; // where the mid web reaches x = 17
+  course(g3, [block('C1:mast', 'crane', { x: 17, y: 0, z: zm - 2 }, { x: 20, y: 200, z: zm + 2 })]);
   stepGame(g3, DT, [shot('R', 'mid')]);
   assert.ok(g3.web.hit && Math.abs(g3.web.to.x - 17) < 1e-6, 'mid web sticks to the crane mast');
   const g4 = createGame(1);
@@ -322,7 +325,8 @@ test('a shot casts from the hand (pos.y + playerHand)', () => {
   course(g, []);
   const y0 = g.player.pos.y;
   stepGame(g, 0.0001, [shot('R', 'mid')]);
-  assert.ok(Math.abs(g.web.to.y - (y0 + CFG.render.playerHand)) < 1e-6); // mid aims level
+  const dir = aimVector('R', 'mid', 0); // nothing to hit: the web ends at full range
+  assert.ok(Math.abs(g.web.to.y - (y0 + CFG.render.playerHand + dir.y * CFG.webRange)) < 1e-6);
 });
 
 // ---- zip (Space / hand pull): a snap, then a hard pull along the rope, auto-release near the anchor ----
@@ -356,7 +360,7 @@ test('zip accelerates the hero toward the anchor, far harder than the plain swin
 test('zip auto-releases near the anchor, before passing it, and keeps all the momentum; no teleport, never inside a box', () => {
   for (const [seed, side, level] of [[1, 'R', 'hi'], [2, 'L', 'mid'], [3, 'R', 'mid']]) {
     const g = attached(seed, side, level), p = g.player, anchor = { ...p.anchor };
-    const z0 = p.pos.z;
+    const z0 = p.pos.z, d0 = speed({ x: anchor.x - p.pos.x, y: anchor.y - p.pos.y, z: anchor.z - p.pos.z });
     let ev = stepGame(g, DT, [ZIP]), i = 0;
     for (; i < 300 && p.anchor; i++) {
       const prev = { ...p.pos }, v0 = speed(p.vel);
@@ -371,7 +375,8 @@ test('zip auto-releases near the anchor, before passing it, and keeps all the mo
     const frame = speed(p.vel) * DT; // a release lands within one frame of its threshold
     assert.ok(dz > 0, `seed ${seed}: passed the anchor (${dz.toFixed(1)} m)`);
     assert.ok(d < CFG.zipReleaseDist || dz < CFG.zipReleaseDist / 2 + frame, `seed ${seed}: let go ${d.toFixed(1)} m short`);
-    assert.ok(d < CFG.zipReleaseDist + 2 * frame + 4, `seed ${seed}: let go far from the anchor (${d.toFixed(1)} m)`);
+    // high webs: he draws level with the anchor's z while still below it, so it can let go well short, but not early
+    assert.ok(d < 0.5 * d0, `seed ${seed}: let go far from the anchor (${d.toFixed(1)} of ${d0.toFixed(1)} m)`);
     assert.ok(p.pos.z > z0);
     // momentum: the next frame changes the velocity only by gravity and drag (unless he hits a wall)
     const v = { ...p.vel }, sp = speed(v);

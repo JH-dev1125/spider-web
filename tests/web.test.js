@@ -12,7 +12,7 @@ test('aimVector: sign rules and unit length for all six', () => {
       assert.ok(Math.abs(Math.hypot(v.x, v.y, v.z) - 1) < 1e-12);
       assert.ok(side === 'L' ? v.x < 0 : v.x > 0);
       assert.ok(v.z > 0);
-      assert.ok(level === 'hi' ? v.y > 0 : level === 'mid' ? v.y === 0 : v.y < 0);
+      assert.ok(v.y > 0); // every web goes up: the anchor is above him, so the swing carries him forward
     }
   }
 });
@@ -30,8 +30,14 @@ test('every web meets its side face aimAhead metres ahead, from anywhere across 
   }
 });
 
-test('hi is low enough to keep the anchor in view: under 15 m above the hand from the centre', () => {
-  const v = aimVector('R', 'hi');
-  const rise = (v.y / v.x) * W;
-  assert.ok(rise > 10 && rise < 15, `rise ${rise}`);
+// Webs go high, so the rope is mostly up and forward and its sideways pull stays small next to his momentum.
+test('high webs: from the centre hi rises 40-60 m, mid 25-35, lo 10-15; mid and hi ropes <= 20 deg off the forward plane', () => {
+  const want = { hi: [40, 60], mid: [25, 35], lo: [10, 15] };
+  for (const level of ['hi', 'mid', 'lo']) {
+    const v = aimVector('R', level), t = W / v.x;
+    const rise = v.y * t, ahead = v.z * t, side = Math.asin(W / t) / (Math.PI / 180);
+    assert.ok(rise >= want[level][0] && rise <= want[level][1], `${level} rise ${rise}`);
+    assert.ok(ahead >= 30 && ahead <= 50, `${level} ahead ${ahead}`);
+    if (level !== 'lo') assert.ok(side <= 20, `${level} ${side} deg sideways`);
+  }
 });

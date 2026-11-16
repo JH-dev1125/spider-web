@@ -169,10 +169,11 @@ const heroScreen = (c, p) => {
 };
 const W = CFG.corridorHalfWidth, DT = 1 / 60;
 const WANT = Math.hypot(R.camWallGap, R.camUp, R.camBack); // the largest desired offset (at a wall)
+// (deep blocks: a zip to a high web can fling him over the roof, and he should land on it, not in a strip behind)
 const corridor = (g) => {
   g.world.structures = [
-    { id: 'CL:base', kind: 'tower', attach: true, min: { x: -W - 20, y: 0, z: -50 }, max: { x: -W, y: 200, z: 3000 } },
-    { id: 'CR:base', kind: 'tower', attach: true, min: { x: W, y: 0, z: -50 }, max: { x: W + 20, y: 200, z: 3000 } },
+    { id: 'CL:base', kind: 'tower', attach: true, min: { x: -W - 200, y: 0, z: -50 }, max: { x: -W, y: 200, z: 3000 } },
+    { id: 'CR:base', kind: 'tower', attach: true, min: { x: W, y: 0, z: -50 }, max: { x: W + 200, y: 200, z: 3000 } },
   ];
   g.world.nextZ = { L: Infinity, R: Infinity };
 };
@@ -195,19 +196,22 @@ const framed = (s) => s.depth > 0 && s.height >= 0.2 && Math.abs(s.sx) < 0.6 * 1
 
 test('camera: through swing ends, fast releases, zips and wall runs the hero stays >= 1/5 of the screen, central, leashed', () => {
   const seen = new Set();
-  for (const seed of [1, 2, 3, 4]) for (const zip of [false, true]) {
+  const check = (f) => {
+    leashOk(f);
+    assert.ok(framed(f.s), `${f.at}: hero ${(f.s.height * 100).toFixed(1)}% tall at ${f.s.sx.toFixed(2)}, ${f.s.sy.toFixed(2)}`);
+    assert.ok(f.c.fovDeg >= R.fovMin - 1e-9 && f.c.fovDeg <= R.fovMax + 1e-9);
+    for (const b of f.g.world.structures) assert.ok(!['x', 'y', 'z'].every((k) => f.c[k] > b.min[k] && f.c[k] < b.max[k]), `${f.at}: camera inside ${b.id}`);
+  };
+  for (const seed of [1, 2, 3, 4]) {
     let fast = 0;
-    const ev = filmBot(seed, zip, 15, corridor, (f) => {
-      leashOk(f);
-      assert.ok(framed(f.s), `${f.at}: hero ${(f.s.height * 100).toFixed(1)}% tall at ${f.s.sx.toFixed(2)}, ${f.s.sy.toFixed(2)}`);
-      assert.ok(f.c.fovDeg >= R.fovMin - 1e-9 && f.c.fovDeg <= R.fovMax + 1e-9);
-      for (const b of f.g.world.structures) assert.ok(!['x', 'y', 'z'].every((k) => f.c[k] > b.min[k] && f.c[k] < b.max[k]), `${f.at}: camera inside ${b.id}`);
-      fast = Math.max(fast, Math.hypot(f.p.vel.x, f.p.vel.y, f.p.vel.z));
-    });
-    ev.forEach((e) => seen.add(e));
-    // the slower tune peaks near 30 m/s without a zip (was 36)
+    for (const zip of [false, true]) {
+      filmBot(seed, zip, 15, corridor, (f) => { check(f); fast = Math.max(fast, Math.hypot(f.p.vel.x, f.p.vel.y, f.p.vel.z)); }).forEach((e) => seen.add(e));
+    }
+    // high webs keep him up rather than diving: without a zip the bot peaks near 19 m/s here, the zip run near 60
     assert.ok(fast > 26, `seed ${seed}: never fast (${fast.toFixed(1)} m/s)`);
   }
+  // swings no longer drift into the walls, so run into one on purpose for a wall run and its jump
+  filmBot(5, false, 6, (g) => { corridor(g); g.phys.hero.position.x = 9; g.phys.hero.velocity.x = 10; }, check).forEach((e) => seen.add(e));
   for (const e of ['released', 'zipped', 'wallrun', 'walljump']) assert.ok(seen.has(e), `never saw ${e}`);
 });
 

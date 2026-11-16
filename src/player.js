@@ -3,8 +3,10 @@
 // Releasing just removes the constraint, so the hero keeps exactly the velocity the swing gave it.
 import * as CANNON from '../vendor/cannon-es.js';
 import { CFG } from './config.js';
+import { steerAccel } from './steer.js';
 
 const HERO = 1, STRUCT = 2, GROUND = 4;
+const STREET = { x: 0, z: 1 }; // the street heading (the course runs along +z)
 
 // The plain per-frame copy the game logic and the renderer read (see the contract in game.js).
 export const createPlayer = () => ({
@@ -202,6 +204,7 @@ export function stepPhysics(ph, p, dt) {
       const d = ph.anchor.position.vsub(hero.position), dist = d.length();
       if (dist > 1e-6 && d.dot(v) / dist < CFG.zipMaxSpeed) hero.force.vadd(d.scale(CFG.zipAccel * CFG.heroMass / dist), hero.force);
     }
+    if (ph.rope) { const a = steerAccel(v, STREET); hero.force.x += CFG.heroMass * a.x; hero.force.z += CFG.heroMass * a.z; } // body English (steer.js)
     if (ph.rope) {
       let len = ph.rope.distance;
       const d = hero.position.distanceTo(ph.anchor.position);
