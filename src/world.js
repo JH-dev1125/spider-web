@@ -1,6 +1,7 @@
 // Endless level generator. Pure data: axis-aligned boxes in world metres (x right, y up, z forward, street y = 0).
 // Structure: { id, kind, min:{x,y,z}, max:{x,y,z}, attach } — the renderer contract documented in game.js.
 import { CFG } from './config.js';
+import { buildBuilding, streetLot } from './archetypes.js';
 
 // mulberry32
 const STEP = 0x6D2B79F5;
@@ -77,14 +78,7 @@ function tower(w, side, sd, id, z0, z1, d) {
   const { rng, structures: out } = w;
   const h = range(rng, d.towerH);
   const depth = range(rng, L.depth);
-  out.push(box(`${id}:base`, 'tower', sd, W, W + depth, 0, h, z0, z1, true));
-  if (rng() < L.setbackChance) {
-    out.push(box(`${id}:setback`, 'setback', sd, W + range(rng, L.setbackInset), W + depth, h, h + range(rng, L.setbackH), z0 + 2, z1 - 2, true));
-  }
-  if (rng() < L.ledgeChance) {
-    const ly = range(rng, [10, h - 10]), lz = z0 + range(rng, [2, z1 - z0 - 8]);
-    out.push(box(`${id}:ledge`, 'ledge', sd, W - 1.2, W, ly, ly + 1, lz, lz + 6, true));
-  }
+  out.push(...buildBuilding(streetLot(id, sd, W, depth, z0, z1), h, rng, d));
   w.coverEnd = Math.max(w.coverEnd, z1);
   // skybridge to a tower across the street that overlaps this one by enough z, both ends buried in the towers
   for (const o of w.towers[side === 'L' ? 'R' : 'L']) {
@@ -138,7 +132,7 @@ function placeLot(w, side) {
   if (kind === 'tower') z0 = Math.min(z0, Math.max(f, w.coverEnd + d.maxGap));
   const z1 = z0 + len, sd = side === 'L' ? -1 : 1, id = `${side}${w.nextId++}`;
   if (kind === 'tower') tower(w, side, sd, id, z0, z1, d);
-  else if (kind === 'low') w.structures.push(box(`${id}:base`, 'tower', sd, W, W + range(rng, L.depth), 0, range(rng, L.lowH), z0, z1, true));
+  else if (kind === 'low') w.structures.push(...buildBuilding(streetLot(id, sd, W, range(rng, L.depth), z0, z1), range(rng, L.lowH), rng, d));
   else if (kind === 'frame') frame(w, sd, id, z0, z1);
   else if (kind === 'crane') crane(w, sd, id, z0, z1);
   w.nextZ[side] = z1;

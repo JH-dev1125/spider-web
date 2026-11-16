@@ -23,6 +23,7 @@ export const CFG = deepFreeze({
   baseSpeed: 22, // render speed-feel reference only (fov and speed lines start here)
   maxSpeed: 60, // render speed-feel reference only (fov and speed lines are full here)
   aimAhead: 52, // m: every web meets its side's corridor face this far ahead of the hero (from the centre: yaw 15 deg)
+  aimUpDeg: { hi: 40, mid: 30, lo: 22 }, // W / middle hand zone (side 'C'): straight ahead, steeply up, for cranes and skybridges
   aimPitchDeg: { hi: 14, mid: 0, lo: -30 }, // from the centre: hi = 55.5 m web rising 13.4 m (was 25 deg: +25 m, out of view), mid 54 m level, lo 62 m dropping 31 m
   webRange: 135, // from beside one wall reaches the far wall
   webSpeed: 300, // m/s: a 54 m web lands in 0.18 s; a miss shows at full range after 0.45 s
@@ -66,8 +67,8 @@ export const CFG = deepFreeze({
     oneSideStart: 0,
     oneSideEnd: 0.5,
     weightsStart: { tower: 1, low: 0, frame: 0, crane: 0, gap: 0 }, // lot kinds on a built-up side
-    weightsEnd: { tower: 0.45, low: 0.15, frame: 0.15, crane: 0.1, gap: 0.15 },
-    offWeights: { low: 0.4, frame: 0.2, gap: 0.4 }, // the empty side of a one-side stretch
+    weightsEnd: { tower: 0.5, low: 0.15, frame: 0, crane: 0.2, gap: 0.15 }, // frame: hollow skeletons retired (terrace bands instead)
+    offWeights: { low: 0.45, frame: 0, crane: 0.2, gap: 0.35 }, // the empty side of a one-side stretch
     setbackChance: 0.35,
     setbackInset: [4, 8],
     setbackH: [10, 40],
@@ -81,8 +82,8 @@ export const CFG = deepFreeze({
     beam: 1.6, // frame post/beam thickness: > 3 physics steps of travel at top speed, so nothing tunnels
     gapLen: [15, 45],
     craneLot: 18,
-    craneH: [60, 100],
-    craneReach: [6, 18], // the jib overhangs the street by this much
+    craneH: [45, 80], // jib height: a W web (aimUpDeg.mid) from flight height reaches it well inside webRange
+    craneReach: [20, 27], // the jib overhangs the street by this much: nearly across it, so a straight-ahead W web meets it
   },
   // game flow
   trickSec: 0.6,
@@ -115,6 +116,7 @@ export const CFG = deepFreeze({
   handHystDeg: 10, // the gesture held last frame gets its thresholds loosened by this much
   handMinConfidence: 0.35, // MediaPipe detection / presence / tracking confidence (default 0.5)
   handLostMs: 300, // hand unseen this long while charging = cancel
+  handSideCuts: [1 / 3, 2 / 3], // palm-centre x in the mirrored preview: left third 'L', middle 'C' (W), right 'R'
   handLevelCuts: [1 / 3, 2 / 3], // palm-centre y (0 = top) below these: hi, mid; else lo
   handPromptTimeoutSec: 15, // camera permission prompt nobody answers = give up (hand 'failed', H retries)
   handRestartSec: 1, // open palm held this long on title/result = start
@@ -248,6 +250,7 @@ export const CFG = deepFreeze({
   keys: {
     KeyQ: ['L', 'hi'], KeyA: ['L', 'mid'], KeyZ: ['L', 'lo'],
     KeyE: ['R', 'hi'], KeyD: ['R', 'mid'], KeyC: ['R', 'lo'],
+    KeyW: ['C', 'mid'], // straight ahead and up: overhead cranes and skybridges
   },
   zipKey: 'Space', // held during play = zip toward the anchor (on the title/result it starts the game)
 });

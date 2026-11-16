@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG } from '../src/config.js';
-import { createGame, stepGame, createBot, pickTrickPose } from '../src/game.js';
+import { createGame, stepGame, createBot, pickTrickPose, aim } from '../src/game.js';
 import { setZip } from '../src/player.js';
 import { makeRng } from '../src/world.js';
 
@@ -441,4 +441,22 @@ test('standing on a roof with no rope shows the run pose', () => {
   for (let i = 0; i < 30; i++) { stepGame(g, DT, []); poses.push(g.pose); }
   assert.ok(g.player.roof && g.pose === 'run', poses.join(' '));
   assert.ok(g.player.vel.z >= CFG.roofRunSpeed - 1e-9);
+});
+
+test('W: a web straight ahead and up lands on a crane jib over the street and swings the hero under it', () => {
+  const g = createGame(1);
+  const jibY = 70;
+  course(g, [
+    block('K:mast', 'crane', { x: W + 3, y: 0, z: 32 }, { x: W + 6, y: jibY, z: 35 }),
+    block('K:jib', 'crane', { x: -10, y: jibY, z: 32 }, { x: W + 14, y: jibY + 3, z: 35 }), // a 30 deg web from 51 m meets y = 70 at z = 33
+  ]);
+  stepGame(g, DT, []); // syncs the physics boxes
+  const a = aim(g, 'C', 'mid');
+  assert.ok(a.hit, 'W aims at the jib');
+  assert.ok(Math.abs(a.to.y - jibY) < 1e-6 && a.to.z > 32 - 1e-6 && a.to.z < 35 + 1e-6, `hit ${JSON.stringify(a.to)}`);
+  stepGame(g, DT, [shot('C', 'mid')]);
+  fly(g);
+  assert.ok(g.player.anchor && Math.abs(g.player.anchor.y - jibY) < 1e-6, 'attached to the jib');
+  assert.equal(g.pose, 'swing');
+  assert.ok(!aim(g, 'L', 'mid').hit && !aim(g, 'R', 'mid').hit, 'the side webs find nothing here: only W does');
 });

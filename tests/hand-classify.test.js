@@ -27,6 +27,14 @@ test('mirror: raw MediaPipe x > 0.5 is the left of the mirrored preview', () => 
   assert.equal(classifyHand(mirror(hand(0.2, 0.5, FIST)), 'Right').side, 'R');
 });
 
+test('the middle third of the preview is C (W: straight ahead, up), with the usual level', () => {
+  assert.deepEqual(pick(classifyHand(hand(0.5, 0.5, SHOOT), 'Right')), { gesture: 'shoot', side: 'C', level: 'mid' });
+  assert.equal(classifyHand(hand(0.4, 0.1, SHOOT), 'Right').side, 'C');
+  assert.equal(classifyHand(hand(0.6, 0.9, SHOOT), 'Right').side, 'C');
+  assert.equal(classifyHand(hand(0.3, 0.5, SHOOT), 'Right').side, 'L');
+  assert.equal(classifyHand(hand(0.7, 0.5, SHOOT), 'Right').side, 'R');
+});
+
 test('gesture gate needs N consecutive frames', () => {
   const gate = createGestureGate(3);
   const out = ['shoot', 'shoot', 'none', 'shoot', 'shoot', 'shoot'].map(gate);
@@ -62,12 +70,12 @@ test('controller: moving while holding does not re-aim (the web is already attac
   const tr = createChargeTracker();
   const shots = [], presses = [];
   const ctrl = createHandController(tr, { onShot: (s) => { if (s.type === 'release') shots.push(s); else presses.push(s); } });
-  let t = feed(ctrl, [hand(0.55, 0.3, SHOOT)], 3, 0);
+  let t = feed(ctrl, [hand(0.72, 0.3, SHOOT)], 3, 0);
   assert.deepEqual([tr.state(t).side, tr.state(t).level], ['R', 'hi']);
-  t = feed(ctrl, [hand(0.45, 0.4, SHOOT)], 2, t);
+  t = feed(ctrl, [hand(0.55, 0.4, SHOOT)], 2, t); // into the middle third: still R
   assert.deepEqual([tr.state(t).side, tr.state(t).level], ['R', 'hi']);
   assert.equal(presses.length, 1);
-  for (const y of [0.5, 0.6, 0.7]) t = feed(ctrl, [hand(0.45, y, FIST)], 1, t);
+  for (const y of [0.5, 0.6, 0.7]) t = feed(ctrl, [hand(0.5, y, FIST)], 1, t);
   assert.deepEqual([shots[0].type, shots[0].side, shots[0].level], ['release', 'R', 'hi']);
 });
 
@@ -114,9 +122,9 @@ test('controller: fist mode charges on fist, open releases; status reports open 
   let st;
   for (let k = 0; k < 3; k++, t += DT) st = ctrl.update([{ landmarks: hand(0.5, 0.5, OPEN), handedness: 'Left' }], t);
   assert.equal(shots.length, 1);
-  assert.deepEqual(st, { hands: 1, gesture: 'open', side: 'R', level: 'mid', open: true, zip: false });
+  assert.deepEqual(st, { hands: 1, gesture: 'open', side: 'C', level: 'mid', open: true, zip: false });
   // hands counts tracked hands (seen within handLostMs), so frames without a detection don't flicker it to 0
-  assert.deepEqual(ctrl.update([], t), { hands: 1, gesture: 'open', side: 'R', level: 'mid', open: true, zip: false });
+  assert.deepEqual(ctrl.update([], t), { hands: 1, gesture: 'open', side: 'C', level: 'mid', open: true, zip: false });
   assert.equal(ctrl.update([], t + 1).hands, 0);
 });
 

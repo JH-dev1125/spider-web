@@ -35,3 +35,13 @@ test('hi is low enough to keep the anchor in view: under 15 m above the hand fro
   const rise = (v.y / v.x) * W;
   assert.ok(rise > 10 && rise < 15, `rise ${rise}`);
 });
+
+test('W (side C): straight ahead along the street and steeply up, from anywhere across it', () => {
+  for (const x of [-13, 0, 9]) for (const level of ['hi', 'mid', 'lo']) {
+    const v = aimVector('C', level, x);
+    assert.ok(Math.abs(Math.hypot(v.x, v.y, v.z) - 1) < 1e-12);
+    assert.equal(v.x, 0);
+    assert.ok(v.z > 0 && v.y > Math.sin(15 * Math.PI / 180), `${level} not steep`);
+  }
+  assert.ok(aimVector('C', 'hi').y > aimVector('C', 'mid').y && aimVector('C', 'mid').y > aimVector('C', 'lo').y);
+});

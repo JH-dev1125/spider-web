@@ -131,7 +131,7 @@ export function createBot({ zip = false } = {}) {
     if (held) { held = false; wait = 0; return [{ type: 'release' }]; } // missed: let go, retry
     if ((wait += dt) < CFG.botWaitSec) return [];
     let best = null, bestScore = -Infinity;
-    for (const side of ['L', 'R']) {
+    for (const side of ['L', 'R', 'C']) {
       for (const level of ['hi', 'mid', 'lo']) {
         const a = aim(g, side, level);
         if (!a.hit) continue;
