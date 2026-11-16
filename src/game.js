@@ -33,7 +33,7 @@ import { makeRng, createWorld, updateWorld, clampToStreets, corridorAt, lineAt, 
   crossKind, cornerOf } from './world.js';
 import { createPlayer, createPhysics, syncStructures, raycast, attach, release, stepPhysics, isTurnAnchor, launchZip, startMove,
   travelBasis, airtime, startTumble, placeHero } from './player.js';
-import { MOVES, pickTrick } from './moves.js';
+import { MOVES, createFlightChain } from './moves.js';
 import { aimVector } from './web.js';
 import { surfaceNormal } from './render-math.js';
 import { makeStreet, heading, right, toLocal, toLocalVec, toWorldVec } from './street.js';
@@ -57,6 +57,7 @@ export function createGame(seed, { start = 'air' } = {}) {
     distance: 0,
   };
   g.phys.street = g.street;
+  g.phys.flight = createFlightChain(g.rng); // one chain per hero; its history survives ropes
   g.phys.bound = (pos, vel) => !g.world.fixed && clampToStreets(seed, pos, vel);
   updateWorld(g.world, player.pos, g.street);
   syncStructures(g.phys, g.world.structures);
@@ -139,13 +140,13 @@ export function stepGame(g, dt, actions) {
           ph.pendingTrick = null; ph.startPhase = 'play'; p.headingYaw = 0;
           startMove(ph, null, travelBasis(p));
         }
+        ph.flightPressed = true; ph.flight.step(0, { pressed: true }); // the chain stops before any solve
         fire(g, a);
       } else if (a.type === 'release') {
         g.web = null;
         if (release(ph, p)) {
-          // the trick for this flight, if the street is far enough below (moves.js); it starts after the release
-          const left = Math.max(0, airtime(ph, p) - MOVES.release.duration);
-          ph.pendingTrick = pickTrick(g.rng, ph.lastTrick, left);
+          // the release flourish; then the flight chain (ragdoll.js) runs until the next rope, wall, roof or preland
+          ph.pendingTrick = null;
           startMove(ph, MOVES.release, travelBasis(p));
           ph.motion.mirror = p.webSide === 'L' ? -1 : 1;
           events.push('released');

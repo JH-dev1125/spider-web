@@ -54,6 +54,9 @@ export function createPhysics(p) {
     // the landing hold and the rooftop start ('play' | 'idle' on the start roof | 'tumble' off it)
     motion: null, lastTrick: null, pendingTrick: null, targetBlend: null, zipKick: null, zipCooldown: 0, landing: null,
     startPhase: 'play', grip: null, load: 0,
+    // the flight chain (game.js creates ph.flight with its seeded rng; ragdoll.js runs it)
+    flight: null, flightPressed: false, flightLast: null, flightFrom: null, flightBasis: null, flightPrelandSec: 0,
+    flightMove: null, airtimeLeft: 0, glideIdle: 0,
     street: makeStreet('z', 0, 1, 0), // the street frame game.js keeps current: wall runs and roof runs go along it
     bound: null }; // (pos, vel) => bool: game.js keeps the hero inside the street corridors (see boundStep)
   for (const body of Object.values(rag.bodies)) body.addEventListener('collide', e => {
@@ -411,10 +414,8 @@ function motionStep(ph, p) {
   if (ph.motion && ph.startPhase === 'play' && (ph.wall || p.roof || ph.rope)) { ph.pendingTrick = null; startMove(ph, null, travelBasis(p)); }
   if (m && m.move !== MOVES.roofIdle && m.sec >= m.move.duration) {
     if (m.move === MOVES.roofTumble) { ph.startPhase = 'play'; p.headingYaw = 0; }
-    const next = m.move === MOVES.release ? ph.pendingTrick : null;
     ph.pendingTrick = null;
-    if (next) ph.lastTrick = next.name;
-    startMove(ph, next, travelBasis(p));
+    startMove(ph, null, travelBasis(p)); // the flight chain (ragdoll.js) takes over from here
   }
   // prelanding: falling free toward the street, short of the landing lead time: legs out, root upright
   if (p.alive && ph.startPhase === 'play' && !ph.rope && !ph.wall && !p.roof && p.vel.y < 0 && ph.motion?.move !== MOVES.preland
@@ -473,6 +474,7 @@ export function stepPhysics(ph, p, dt) {
     if (p.alive && !idle && !tumbling) { wallStep(ph, p, events); gaitForces(ph, p); }
     if (idle) standForces(ph);
     motionStep(ph, p);
+    ph.airtimeLeft = airtime(ph, p);
     driveRagdoll(ph, p, h, impulse, angularImpulse);
     if (ph.landing) { ph.landing.sec += h; landingForces(ph); }
     ph.zipCooldown = Math.max(0, ph.zipCooldown - h);

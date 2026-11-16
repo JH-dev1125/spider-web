@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG } from '../src/config.js';
 import { createGame, stepGame, createBot, aim, startGame } from '../src/game.js';
-import { MOVES } from '../src/moves.js';
+import { MOVES, FLIGHT } from '../src/moves.js';
 import { makeRng } from '../src/world.js';
 import { aimVector } from '../src/web.js';
 
@@ -230,21 +230,18 @@ test('too-short rope (attach refuses) counts as a miss', () => {
   assert.ok(g.missLine);
 });
 
-test('release: the release flourish, then a trick from moves.js when the street is far enough below; a press cancels it at once', () => {
+test('release: the release flourish, then the flight chain (FLIGHT links); a press cancels it at once', () => {
   const g = createGame(1);
   walls(g);
   stepGame(g, DT, [shot('R', 'hi')]);
   swingUntilClimb(g, 0.4); // before the swing reaches the wall (a wall run would show 'wallrun')
   assert.ok(stepGame(g, DT, [REL]).includes('released'));
   assert.equal(g.phys.motion.move, MOVES.release);
-  const trick = g.phys.pendingTrick;
-  assert.ok(trick && trick.trick, 'high up: a trick is chosen for this flight');
   for (let t = 0; t <= MOVES.release.duration + 2 * DT; t += DT) stepGame(g, DT, []);
-  assert.equal(g.phys.motion?.move, trick, 'the trick follows the release');
-  assert.equal(g.pose, 'trick');
-  stepGame(g, DT, [shot('L', 'lo')]); // even a miss cancels it
   assert.equal(g.phys.motion, null);
-  assert.notEqual(g.pose, 'trick');
+  assert.ok(FLIGHT[g.phys.flightMove], `a flight link follows the release (${g.phys.flightMove})`);
+  stepGame(g, DT, [shot('L', 'lo')]); // even a miss cancels it
+  assert.equal(g.phys.flightMove, null);
 });
 
 test('shake kicks in at the swing bottom and decays', () => {

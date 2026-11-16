@@ -92,3 +92,16 @@ test('CFG.heroMass is the ragdoll: the ANATOMY masses sum to it (70 kg)', async 
   assert.equal(ANATOMY.reduce((m, a) => m + a.mass, 0), CFG.heroMass);
   assert.equal(CFG.heroMass, 70);
 });
+
+test('flight chain: a 60 s bot run cycles at least 10 distinct moves and never idles in glide longer than 0.4 s', () => {
+  const g = createGame(1), bot = createBot(), seen = new Set();
+  let idle = 0;
+  for (let i = 0; i < 60 * 60; i++) {
+    stepGame(g, DT, bot(g, DT));
+    if (g.phys.flightMove && g.phys.flightMove !== 'preland') seen.add(g.phys.flightMove);
+    idle = Math.max(idle, g.phys.glideIdle);
+  }
+  assert.ok(g.player.alive, 'survived the minute');
+  assert.ok(seen.size >= 10, `${seen.size} distinct: ${[...seen].join(' ')}`);
+  assert.ok(idle <= 0.4, `idled ${idle.toFixed(2)} s in glide`);
+});

@@ -101,6 +101,7 @@ function legTargets(rag, side, goal, basis) {
 }
 
 const strainTargets = {};
+const copyTargets = (targets) => Object.fromEntries(Object.entries(targets).map(([n, q]) => [n, q.clone()]));
 // impulse(ph, dv) / angularImpulse(ph, J): player.js's whole-body impulses, passed in (no import cycle).
 // Muscles stay on after death: the landing pose is held by them (docs/motion-hooks.md C).
 export function driveRagdoll(ph, p, h, impulse, angularImpulse) {
@@ -183,11 +184,38 @@ export function driveRagdoll(ph, p, h, impulse, angularImpulse) {
     for (const name of Object.keys(t)) blend.from[name].slerp(t[name], u, t[name]);
     if (u === 1) ph.targetBlend = null;
   }
+  // The continuous flight chain (moves.js createFlightChain, docs/motion-hooks.md): airborne with no rope and nothing
+  // else owning the body, link after link with no glide between; a press cancels it, preland overrides it.
+  let flightSpinning = false;
+  if (ph.flight) {
+    const pressed = ph.flightPressed;
+    ph.flightPressed = false;
+    const free = p.alive && !ph.rope && !ph.wall && !p.roof && !ph.landing && !ph.motion && ph.startPhase === 'play';
+    const f = ph.flight.step(h, { airborne: free, rope: !!ph.rope, pressed, preland: !!ph.landing,
+      airtimeLeft: ph.airtimeLeft ?? 0, speed: Math.hypot(p.vel.x, p.vel.y, p.vel.z), vy: p.vel.y });
+    flightSpinning = !!f.move?.impulses.some(e => e.angular);
+    ph.flightMove = f.move?.name ?? null;
+    if (f.move) {
+      if (f.started) { ph.flightFrom = ph.flightLast || copyTargets(t); ph.flightBasis = basis.clone(); ph.targetBlend = null; }
+      sampleMove(f.move, f.t, flightSpinning ? b.pelvis.quaternion : ph.flightBasis, t, { mirror: f.mirror, from: ph.flightFrom, alpha: f.blend });
+      for (const e of moveImpulses(f.move, f.t0, f.t, f.mirror)) {
+        if (e.linear) impulse(ph, ph.flightBasis.vmult(new C.Vec3(...e.linear)));
+        if (e.angular) angularImpulse(ph, ph.flightBasis.vmult(new C.Vec3(...e.angular)));
+      }
+      ph.flightPrelandSec = 0;
+    } else if (free && !pressed) { // no link fits the airtime left: straight into the preland pose, never a static glide
+      if (!ph.flightPrelandSec) ph.flightFrom = ph.flightLast || copyTargets(t);
+      ph.flightPrelandSec += h; ph.targetBlend = null; ph.flightMove = 'preland';
+      sampleMove(MOVES.preland, ph.flightPrelandSec, basis, t, { from: ph.flightFrom, alpha: Math.min(1, ph.flightPrelandSec / .25) });
+    } else ph.flightPrelandSec = 0;
+    ph.glideIdle = free && !ph.flightMove ? (ph.glideIdle || 0) + h : 0; // free but nothing chained (tests bound it)
+    ph.flightLast = copyTargets(t);
+  }
   // Balance assistance supplies an upright reference (t.pelvis); joints still react against one another. Off while a
   // move spins him (it would fight the flip); stiff for the landing hold and on walls and roofs.
   const spinning = motion && motion.sec < motion.move.duration && motion.move.impulses.some(e => e.angular);
   const firm = ph.landing || ph.wall || p.roof;
-  if (!spinning) muscle(b.pelvis, t.pelvis, null, firm ? 1600 : 180, firm ? 110 : 25, firm ? 650 : 100, ph.landing ? CFG.moves.landingRootInertia : r.rootInertia);
+  if (!spinning && !flightSpinning) muscle(b.pelvis, t.pelvis, null, firm ? 1600 : 180, firm ? 110 : 25, firm ? 650 : 100, ph.landing ? CFG.moves.landingRootInertia : r.rootInertia);
   for (const j of r.joints) {
     const desired = t[j.a.parent].conjugate().mult(t[j.a.name]);
     const target = j.parent.quaternion.mult(desired);
