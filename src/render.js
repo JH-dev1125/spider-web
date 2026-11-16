@@ -522,6 +522,17 @@ export function createRenderer(canvas) {
   let cam = null;
   const vAnchor = new THREE.Vector3(), vHand = new THREE.Vector3();
 
+  // the hero landing: a dust ring on the street and puffs thrown out low (render-only; physics is player.js)
+  const dustMat = new THREE.MeshBasicMaterial({ color: 0xcdbfa8, transparent: true, depthWrite: false, fog: true,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+  const dust = new THREE.Mesh(new THREE.RingGeometry(0.35, 1, 40), dustMat);
+  dust.rotation.x = -Math.PI / 2; dust.visible = false; scene.add(dust);
+  const puffGeo = new THREE.IcosahedronGeometry(1, 1);
+  const puffs = Array.from({ length: 12 }, (_, i) => {
+    const m = new THREE.Mesh(puffGeo, dustMat); m.visible = false; m.userData.a = i / 12 * Math.PI * 2 + hash01(i + 77) * 0.4;
+    scene.add(m); return m;
+  });
+
   function render(view, dt) {
     const p = view.player;
     const web = view.web ?? null;
@@ -531,6 +542,20 @@ export function createRenderer(canvas) {
     camera.position.set(cam.x, cam.y, -cam.z);
     camera.lookAt(cam.lx, cam.ly, -cam.lz);
     camera.translateX(sx); camera.translateY(sy);
+    const land = view.landing;
+    if (land) camera.translateY(-R.landDip * Math.sin(Math.min(1, land.sec / R.landDipSec) * Math.PI)); // the impact dip
+    dust.visible = !!land && land.sec < R.dustSec;
+    for (const m of puffs) m.visible = dust.visible;
+    if (dust.visible) {
+      const u = land.sec / R.dustSec, r = 0.8 + 7 * (1 - (1 - u) ** 3);
+      dust.position.set(land.at.x, 0.03, -land.at.z); dust.scale.setScalar(r);
+      dustMat.opacity = 0.65 * (1 - u);
+      for (const m of puffs) {
+        const a = m.userData.a, d = r * 0.8;
+        m.position.set(land.at.x + Math.cos(a) * d, 0.3 + 1.6 * u, -land.at.z + Math.sin(a) * d);
+        m.scale.setScalar(0.4 + 1.4 * u);
+      }
+    }
     if (Math.abs(camera.fov - cam.fovDeg) > 0.01) { camera.fov = cam.fovDeg; camera.updateProjectionMatrix(); }
     sky.position.copy(camera.position);
     street.position.set(camera.position.x, 0, camera.position.z);

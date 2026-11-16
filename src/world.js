@@ -244,7 +244,19 @@ export const segmentCorners = (seed, axis, line, m) => [
 
 // ---- the live world: only the segments near the hero ----
 // fixed: a hand-built course (tests) that updateWorld leaves alone.
-export const createWorld = (seed = 1) => ({ seed, structures: [], cache: new Map(), key: '', fixed: false });
+export const createWorld = (seed = 1) => ({ seed, structures: [], cache: new Map(), key: '', fixed: false, start: startTower(seed) });
+
+// The start tower: the hero's rooftop at the start, across the start street just behind z = 0, its front edge facing
+// +z down the street. Its roof stands startRise above every roof near the start (they are generated first, so
+// nothing is regenerated); the first webs, cast while he falls from it, land on those roofs' faces. Persistent: it is
+// in the structure list whenever the start segment is.
+export function startTower(seed) {
+  const m = lineIndex(seed, 'row', 0), near = [...segmentCorners(seed, 'z', 0, m), ...buildSegment(seed, 'z', 0, m),
+    ...segmentCorners(seed, 'z', 0, m - 1)].filter((s) => s.max.z > -60 && s.min.z < 160);
+  const top = Math.max(...near.map((s) => s.max.y)) + CFG.startRise;
+  return { id: 'S0:base', kind: 'tower', attach: true, face: '+z', start: true,
+    min: { x: -W, y: 0, z: -CFG.startDepth - 2 }, max: { x: W, y: top, z: -2 } };
+}
 
 // The segments to keep for a hero at pos on street: [axis, line, m] for the current street from behindDistance
 // behind to viewDistance ahead, and both cross-street segments at each intersection from behindDistance behind up to
@@ -279,6 +291,9 @@ export function updateWorld(w, pos, street) {
     const lots = w.cache.get(k) ?? buildSegment(w.seed, axis, line, m);
     live.set(k, lots);
     for (const s of [...segmentCorners(w.seed, axis, line, m), ...lots]) list.set(s.id, s);
+    if (w.start && axis === 'z' && line === 0 && (m === lineIndex(w.seed, 'row', 0) || m === lineIndex(w.seed, 'row', 0) - 1)) {
+      list.set(w.start.id, w.start);
+    }
   }
   w.cache = live;
   w.structures = [...list.values()];

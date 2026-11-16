@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG } from '../src/config.js';
-import { createPlayer, createPhysics, syncStructures, raycast, attach, release, stepPhysics, setZip } from '../src/player.js';
+import { createPlayer, createPhysics, syncStructures, raycast, attach, release, stepPhysics, launchZip } from '../src/player.js';
 
 const DT = 1 / 60;
 const H = CFG.physicsStep;
@@ -233,17 +233,18 @@ test('wall run with a rope: the rope still holds him, and a zip into a wall land
     assert.ok(dist(s.ph.rope.bodyA.position, anchor) <= s.p.ropeLen + 0.3, `rope stretched at frame ${i}`);
   }
   assert.ok(ran && s.p.anchor, 'ran along the wall on the rope');
-  // zip at a wall anchor ahead: auto-release short of it, the momentum carries him into the face, a wall run
-  const z = setup({ pos: { x: 0, y: 60, z: 0 }, vel: { x: 0, y: 0, z: 12 }, structures: [face()] });
+  // a slingshot zip toward a wall anchor: the rope is gone at once, the launch (tilted toward the rope) carries him
+  // into the face, a wall run
+  const z = setup({ pos: { x: 0, y: 60, z: 0 }, vel: { x: 6, y: 0, z: 12 }, structures: [face()] });
   attach(z.ph, z.p, { x: W, y: 62, z: 30 });
-  setZip(z.ph, true);
+  assert.ok(launchZip(z.ph, z.p));
   const ev = [];
   for (let i = 0; i < 120; i++) {
     ev.push(...stepPhysics(z.ph, z.p, DT));
     assert.ok(!inside(z.p.pos, face()), `zip: inside at frame ${i}`);
   }
-  assert.ok(ev.includes('zipped'), 'zip let go');
-  assert.ok(ev.indexOf('wallrun') > ev.indexOf('zipped'), `events ${ev.join(' ')}`);
+  assert.equal(z.p.anchor, null, 'zip let go');
+  assert.ok(ev.includes('wallrun'), `events ${ev.join(' ')}`);
 });
 
 test('ragdoll owns 70 kg, fourteen limited joints and the rope on a hand; release changes no velocities', () => {

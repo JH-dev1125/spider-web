@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CFG } from '../src/config.js';
-import { createGame, stepGame, createBot, pickTrickPose, aim } from '../src/game.js';
-import { setZip } from '../src/player.js';
+import { createGame, stepGame, createBot, aim, startGame } from '../src/game.js';
+import { MOVES } from '../src/moves.js';
 import { makeRng } from '../src/world.js';
 import { aimVector } from '../src/web.js';
 
@@ -230,16 +230,21 @@ test('too-short rope (attach refuses) counts as a miss', () => {
   assert.ok(g.missLine);
 });
 
-test('release plays a trick pose for trickSec, then glide', () => {
+test('release: the release flourish, then a trick from moves.js when the street is far enough below; a press cancels it at once', () => {
   const g = createGame(1);
   walls(g);
   stepGame(g, DT, [shot('R', 'hi')]);
   swingUntilClimb(g, 0.4); // before the swing reaches the wall (a wall run would show 'wallrun')
   assert.ok(stepGame(g, DT, [REL]).includes('released'));
-  assert.ok(CFG.character.tricks.includes(g.pose));
-  let wall = false;
-  for (let t = 0; t < CFG.trickSec + DT; t += DT) wall = stepGame(g, DT, []).some((e) => e.startsWith('wall')) || wall;
-  if (!g.player.anchor && g.player.alive && !wall) assert.equal(g.pose, 'glide');
+  assert.equal(g.phys.motion.move, MOVES.release);
+  const trick = g.phys.pendingTrick;
+  assert.ok(trick && trick.trick, 'high up: a trick is chosen for this flight');
+  for (let t = 0; t <= MOVES.release.duration + 2 * DT; t += DT) stepGame(g, DT, []);
+  assert.equal(g.phys.motion?.move, trick, 'the trick follows the release');
+  assert.equal(g.pose, 'trick');
+  stepGame(g, DT, [shot('L', 'lo')]); // even a miss cancels it
+  assert.equal(g.phys.motion, null);
+  assert.notEqual(g.pose, 'trick');
 });
 
 test('shake kicks in at the swing bottom and decays', () => {
@@ -256,7 +261,7 @@ test('shake kicks in at the swing bottom and decays', () => {
   assert.ok(g.shake < peak * 0.1);
 });
 
-test('never firing dies within 10 s; one death; limp ragdoll continues settling on the street', () => {
+test('never firing dies within 10 s; one death; the hero landing holds on the street', () => {
   for (const seed of [7, 8, 9, 10, 11, 12, 13, 14]) {
     const g = createGame(seed);
     let deaths = 0, t = 0;
@@ -268,9 +273,10 @@ test('never firing dies within 10 s; one death; limp ragdoll continues settling 
     assert.equal(deaths, 1);
     stepGame(g, DT, [shot('R', 'mid')]); // shots after death do nothing
     assert.equal(g.player.anchor, null);
-    assert.ok(g.player.pos.y < 1, 'collapsed at street level');
+    assert.ok(g.player.pos.y < 1, 'down at street level');
     assert.ok(Object.values(g.player.pos).every(Number.isFinite));
-    assert.equal(g.pose, 'fall');
+    assert.equal(g.pose, 'landing');
+    assert.equal(g.phys.motion?.move, MOVES.landing, 'muscles hold the landing pose');
   }
 });
 
@@ -299,12 +305,6 @@ test('deterministic: the same seed and inputs replay exactly', () => {
   assert.deepEqual(run(), run());
 });
 
-test('pickTrickPose returns only trick poses and covers all of them', () => {
-  const rng = makeRng(7);
-  const seen = new Set();
-  for (let i = 0; i < 200; i++) seen.add(pickTrickPose(rng));
-  assert.deepEqual([...seen].sort(), ['glide', 'roll', 'tuck']);
-});
 
 // Bot decisions are tuned on seeds 41-50; this is the held-out acceptance range.
 test('bot (best holdable aim, let go on the climb) survives 30 s on >= 90% of seeds 1-40', t => {
@@ -351,70 +351,32 @@ function attached(seed = 1, side = 'R', level = 'hi') {
   return g;
 }
 
-test('zip accelerates the hero toward the anchor, far harder than the plain swing', () => {
-  const a = attached(), b = attached();
-  const c0 = closingSpeed(a.player);
-  stepGame(a, DT, [ZIP]);
-  stepGame(b, DT, []);
-  for (let i = 0; i < 20; i++) { stepGame(a, DT, []); stepGame(b, DT, []); }
-  assert.ok(a.player.anchor, 'still pulling');
-  const gain = closingSpeed(a.player) - c0, plain = closingSpeed(b.player) - c0;
-  assert.ok(gain > CFG.zipAccel * 21 * DT * 0.7, `closing +${gain.toFixed(1)} m/s`);
-  assert.ok(gain > plain + 10, `zip +${gain.toFixed(1)} vs swing +${plain.toFixed(1)}`);
-  assert.ok(a.player.ropeLen < b.player.ropeLen - 2, 'the rope reels in faster');
-});
+const rigMomentum = (g) => Object.values(g.phys.rag.bodies).reduce((m, b) => ({ x: m.x + b.mass * b.velocity.x,
+  y: m.y + b.mass * b.velocity.y, z: m.z + b.mass * b.velocity.z }), { x: 0, y: 0, z: 0 });
+const rigMass = (g) => Object.values(g.phys.rag.bodies).reduce((m, b) => m + b.mass, 0);
 
-test('zip auto-releases near the anchor, before passing it, and keeps all the momentum; no teleport, never inside a box', () => {
+test('zip = slingshot: the rope is gone the same frame, ~zipLaunch m/s ahead (tilted toward the rope) over zipLaunchSteps, then a cooldown', () => {
   for (const [seed, side, level] of [[1, 'R', 'hi'], [2, 'L', 'mid'], [3, 'R', 'mid']]) {
-    const g = attached(seed, side, level), p = g.player, anchor = { ...p.anchor };
-    const z0 = p.pos.z, d0 = speed({ x: anchor.x - p.pos.x, y: anchor.y - p.pos.y, z: anchor.z - p.pos.z });
-    let ev = stepGame(g, DT, [ZIP]), i = 0;
-    for (; i < 300 && p.anchor; i++) {
-      const prev = { ...p.pos }, v0 = speed(p.vel);
-      ev = stepGame(g, DT, []);
-      const moved = Math.hypot(p.pos.x - prev.x, p.pos.y - prev.y, p.pos.z - prev.z);
-      assert.ok(moved <= (Math.max(v0, speed(p.vel)) + CFG.zipAccel * DT) * DT + .02, `seed ${seed}: teleport`);
-      for (const s of g.world.structures) assert.ok(!['x', 'y', 'z'].every((k) => p.pos[k] > s.min[k] && p.pos[k] < s.max[k]), `inside ${s.id}`);
-    }
-    assert.ok(!p.anchor && ev.includes('released') && ev.includes('zipped'), `seed ${seed}: no auto-release`);
-    assert.ok(i * DT < 2.5, `seed ${seed}: took ${(i * DT).toFixed(2)} s`);
-    const d = speed({ x: anchor.x - p.pos.x, y: anchor.y - p.pos.y, z: anchor.z - p.pos.z }), dz = anchor.z - p.pos.z;
-    const frame = speed(p.vel) * DT; // a release lands within one frame of its threshold
-    assert.ok(dz > 0, `seed ${seed}: passed the anchor (${dz.toFixed(1)} m)`);
-    assert.ok(d < CFG.zipReleaseDist || dz < CFG.zipReleaseDist / 2 + frame, `seed ${seed}: let go ${d.toFixed(1)} m short`);
-    // high webs: he draws level with the anchor's z while still below it, so it can let go well short, but not early
-    assert.ok(d < 0.5 * d0, `seed ${seed}: let go far from the anchor (${d.toFixed(1)} of ${d0.toFixed(1)} m)`);
-    assert.ok(p.pos.z > z0);
-    // momentum: the next frame changes the velocity only by gravity and drag (unless he hits a wall)
-    const v = comVel(g), sp = speed(v);
-    assert.ok(sp > 20, `seed ${seed}: only ${sp.toFixed(1)} m/s after the zip`);
-    const e2 = stepGame(g, DT, []);
-    if (!e2.some((e) => e.startsWith('wall') || e === 'bounce')) {
-      const drag = CFG.airDrag * sp * sp * DT;
-      assert.ok(Math.abs(comVel(g).x - v.x) <= drag + 0.03 && Math.abs(comVel(g).z - v.z) <= drag + 0.03, `seed ${seed}: horizontal changed`);
-      assert.ok(Math.abs(comVel(g).y - (v.y - CFG.gravity * DT)) <= drag + 0.03, `seed ${seed}: vy changed`);
-    }
+    const a = attached(seed, side, level), b = attached(seed, side, level);
+    const ev = stepGame(a, DT, [ZIP]);
+    assert.ok(ev.includes('released') && ev.includes('zipped'), ev.join());
+    assert.equal(a.player.anchor, null, 'no rope after the zip frame');
+    assert.equal(a.phys.rope, null);
+    assert.equal(a.phys.world.constraints.length, a.phys.rag.joints.length, 'no hidden rope');
+    stepGame(b, DT, [REL]); // the same frame without the launch
+    for (let i = 0; i < 2; i++) { stepGame(a, DT, []); stepGame(b, DT, []); } // all zipLaunchSteps delivered
+    const M = rigMass(a), pa = rigMomentum(a), pb = rigMomentum(b);
+    const dv = { x: (pa.x - pb.x) / M, y: (pa.y - pb.y) / M, z: (pa.z - pb.z) / M };
+    assert.ok(Math.abs(speed(dv) - CFG.zipLaunch) < 2, `seed ${seed}: +${speed(dv).toFixed(1)} m/s`);
+    assert.ok(dv.z > 0.8 * speed(dv), `seed ${seed}: mostly ahead`);
+    assert.ok(dv.y >= -0.5, `seed ${seed}: never down`);
+    assert.ok(a.phys.zipCooldown > 0 && a.phys.motion?.move === MOVES.zipYank);
   }
-});
-
-test('zip snaps: the closing speed jumps by zipImpulse the instant it starts', () => {
-  const g = attached(), c0 = closingSpeed(g.player);
-  setZip(g.phys, true);
-  const h = g.phys.hero.velocity;
-  assert.ok(Math.abs(closingSpeed({ ...g.player, vel: { x: h.x, y: h.y, z: h.z } }) - c0 - CFG.zipImpulse) < 1e-9);
-  setZip(g.phys, true); // already zipping: no second snap
-  assert.ok(Math.abs(closingSpeed({ ...g.player, vel: { x: h.x, y: h.y, z: h.z } }) - c0 - CFG.zipImpulse) < 1e-9);
-});
-
-test('zipEnd stops the pull', () => {
-  const a = attached(), b = attached();
-  stepGame(a, DT, [ZIP]); stepGame(a, DT, [{ type: 'zipEnd' }]);
-  stepGame(b, DT, []); stepGame(b, DT, []);
-  const gap = closingSpeed(a.player) - closingSpeed(b.player);
-  for (let i = 0; i < 30; i++) { stepGame(a, DT, []); stepGame(b, DT, []); }
-  // one frame of pull = the snap (zipImpulse) plus one frame of zipAccel
-  assert.ok(gap > CFG.zipImpulse * 0.9 && gap < CFG.zipImpulse + CFG.zipAccel * DT * 1.5, `one frame of pull: ${gap}`);
-  assert.ok(closingSpeed(a.player) - closingSpeed(b.player) < gap + 2, 'no more pull after zipEnd');
+  // the cooldown: a fresh rope right after cannot zip again yet
+  const g = attached();
+  stepGame(g, DT, [ZIP]);
+  stepGame(g, DT, [shot('R', 'hi')]); fly(g);
+  if (g.player.anchor && g.phys.zipCooldown > 0) assert.ok(!stepGame(g, DT, [ZIP]).includes('zipped'), 'cooldown');
 });
 
 test('zip without a rope does nothing', () => {

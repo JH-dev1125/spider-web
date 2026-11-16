@@ -9,6 +9,9 @@ export const CFG = deepFreeze({
   physicsStep: 1 / 120, // fixed step: each frame runs whole steps off an accumulator, so a dt sequence replays exactly
   gravity: 9.81,
   heroMass: 70,
+  // ragdoll muscle gain caps per unit rotational inertia (ragdoll.js muscle): kp <= k*I, kd <= c*I
+  inertiaFloor: 0.005, // kg m^2: light segments (hands, feet, forearms) get at least this rotational inertia (ragdoll.js)
+  muscle: { k: 900, c: 60 }, // natural frequency 30 rad/s, damping ratio 1; stable at the 1/120 s step
   roofRunSpeed: 3, // m/s: landed on a roof without a rope, the hero runs forward and drops off the edge
   airDrag: 0.007, // 1/m: quadratic drag, a = airDrag * v^2; terminal speed sqrt(g / airDrag) = 37 m/s (was 0.003: too fast overall)
   heroFriction: 0.05, // grazing a facade costs ~10% of the speed (was 0: walls felt like ice; 0.25 cost ~45% per graze)
@@ -29,6 +32,8 @@ export const CFG = deepFreeze({
   turnReach: 14, // bot: a turning web lands at most this far short of the corner's edge
   behindDistance: 40, // and are removed this far behind
   startHeight: 55,
+  startRise: 6, // m: the start tower's roof over the tallest roof near the start (world.startTower)
+  startDepth: 22, // m: the start tower's depth along the street, behind z = -2
   startSpeed: 12, // m/s forward at the start: a gentle leap, not a launch
   baseSpeed: 22, // render speed-feel reference only (fov and speed lines start here)
   maxSpeed: 60, // render speed-feel reference only (fov and speed lines are full here)
@@ -52,18 +57,32 @@ export const CFG = deepFreeze({
   reelAccel: 4, // m/s^2 the reel spins up at once the rope is taut, so it never jerks the hero
   reelMinFactor: 0.5, // the reel stops at this fraction of the attach length
   minRopeLen: 3,
-  // zip (Space, or the hand pulled toward the body): a snap then a hard pull along the rope, auto-release near the anchor
-  zipImpulse: 14, // m/s added toward the anchor the instant a zip starts: a snap, not a steady haul
-  zipAccel: 45, // m/s^2 toward the anchor (~4.6 g)
-  zipMaxSpeed: 55, // m/s: no more pull once closing this fast (stays under the 57 m/s no-tunnel test)
-  zipReleaseDist: 7, // m: this close to the anchor (or half this short of its z) = arrived, let go before passing it
+  // zip (Space, or the hand pulled toward the body) = the slingshot: let go and launch (zip.js, player.launchZip)
+  zipLaunch: 20, // m/s added along the heading tilted toward the rope (mass-weighted: every body gets it)
+  zipRopeBias: 0.5, // normalized heading + bias * normalized rope; <= .5 bounds horizontal deflection to 30 degrees
+  zipLaunchSteps: 3, // physics steps the delta-v is spread over
+  zipCooldownSec: 0.6, // no second zip sooner
+  moves: {
+    blendSec: 0.16,
+    landingLeadSec: 0.8,
+    landingStiffSec: 0.18,
+    landingSettleSec: 1,
+    landingRootInertia: 0.4, // kg m^2: the landing's root muscle scale (in contact the pelvis no longer turns the whole rig)
+    landingPelvisY: 0.45, // m: the hero landing holds the pelvis at kneeling height (one knee and one fist down)
+    strainForce: 2400, // N: full strain, using the solved rope equation multiplier
+    weights: {
+      corkscrew: 1, frontHalfTwist: 1, layoutBackflip: 1, swanDive: 1.2,
+      superheroDive: 1.2, splitKick: 1, tuckBurst: 1, thwip: 1.2,
+      spreadEagle: 0.8, slingshotWhip: 1,
+    },
+  },
   // wall run: hitting a building's side face with speed toward it runs along it, then jumps off
   wallRunMinSpeed: 2.5, // m/s into the face (before the hit) that starts a run; slower is a plain bump
   wallRunSec: 2.2, // seconds, including the physical turn onto the facade
   wallRunGravity: 0.15, // fraction of gravity while running
   wallRunCooldownSec: 0.6, // no new run this long after a wall jump
   wallJump: { out: 9, up: 6, fwd: 3 }, // m/s added at the end of a run: away from the wall, up, along the run
-  ropeMaxForce: 1e5, // N, the rope's tension limit (an 80 kg hero at 40 m/s on a 30 m rope needs ~5 kN)
+  ropeMaxForce: 3e4, // N, the rope's tension limit (70 kg at 40 m/s on a 30 m rope needs ~4 kN); under the ragdoll joints' 4e4, so a rope never tears a wrist apart
   ropeStiffness: 1e8, // cannon SPOOK constraint parameters for the rope
   ropeRelaxation: 2, // steps to correct a stretch: lower is stiffer (>= 1 stays stable)
   ropeWrapOffset: 0.08, // m: a wrap point sits this far outside the box edge it bends around
@@ -108,7 +127,6 @@ export const CFG = deepFreeze({
   },
   // game flow
   trickSec: 0.6,
-  overFallSec: 1, // death fall animation before the result screen
   overInputDelaySec: 0.3, // ignore Space/Enter right after dying so a held key can't skip the result
   botWaitSec: 0.1, // ?autoplay and the headless bot test: free flight before the next press
   botReleaseClimb: 0.4, // let go past the swing bottom once climbing at 17 degrees (vel.y / speed), long before the anchor (was 0.6: held on until under the anchor, at the wall)..
@@ -147,7 +165,7 @@ export const CFG = deepFreeze({
   handRestartSec: 1, // open palm held this long on title/result = start
   handZipShrink: 0.18, // shoot pose held and the hand's apparent size (wrist -> middle MCP) drops this much..
   handZipWindowMs: 250, // ..within this window = pulled toward the body = zip
-  handZipCooldownMs: 600, // one zip per pull; the HUD shows 당기기! this long
+  handZipCooldownMs: 600, // one zip per pull (= zipCooldownSec); the HUD shows 당기기! this long
   handMatchMaxDist: 0.2, // wrist moved farther than this (screen fraction) between frames = a different hand
   // render
   render: {
@@ -156,6 +174,11 @@ export const CFG = deepFreeze({
     camUp: 1.4,
     lookAhead: 0.12, // s: the camera looks at pos + vel * lookAhead
     lookUp: 0, // m above the hero the look point sits (higher puts him low in the frame)
+    camAttachDrop: 2.4, // m: on a rope with a high anchor the camera sinks this much (to ~1 m below him)..
+    camAttachLift: 1.8, // m: ..and its look point rises this much: it looks ~22 deg up, the anchor's splat in frame
+    landDip: 0.6, // m: the camera dips at the hero landing's impact..
+    landDipSec: 0.45, // ..and comes back up over this
+    dustSec: 1.2, // the landing's dust ring and puffs
     lookMaxSide: 1.2, // m: cap on the look point's lead sideways and up/down
     camWallGap: 1.5, // m: at the corridor face the camera sits this far toward the street from the hero
     camBoxMargin: 0.3, // m: the camera never gets closer than this to a structure box
@@ -250,12 +273,11 @@ export const CFG = deepFreeze({
   character: {
     height: 1.85, // metres; long-legged athletic rig, pelvis at player.pos
     blue: '#183a7a',
-    tricks: ['roll', 'tuck', 'glide'],
   },
   keys: {
     KeyQ: ['L', 'hi'], KeyA: ['L', 'mid'], KeyZ: ['L', 'lo'],
     KeyE: ['R', 'hi'], KeyD: ['R', 'mid'], KeyC: ['R', 'lo'],
     KeyW: ['C', 'mid'], // straight ahead and up: overhead cranes and skybridges
   },
-  zipKey: 'Space', // held during play = zip toward the anchor (on the title/result it starts the game)
+  zipKey: 'Space', // pressed during play = the slingshot zip (on the title/result it starts the game)
 });

@@ -3,6 +3,8 @@ import * as CANNON from '../vendor/cannon-es.js';
 import { CFG } from './config.js';
 import { makeRagdoll, driveRagdoll, ANATOMY } from './ragdoll.js';
 import { steerAccel } from './steer.js';
+import { MOVES } from './moves.js';
+import { zipLaunch } from './zip.js';
 import { makeStreet, heading, right } from './street.js';
 import { ropeStep } from './rope.js';
 
@@ -47,7 +49,11 @@ export function createPhysics(p) {
   const anchor = new CANNON.Body({ mass: 0, collisionFilterGroup: 0, collisionFilterMask: 0 });
   world.addBody(anchor);
   const ph = { world, hero, rag, masonry, anchor, rope: null, reelRate: 0, boxes: new Map(), acc: 0,
-    bounced: false, zip: null, wall: null, wallCool: 0, gait: null, webSide: 'R',
+    bounced: false, wall: null, wallCool: 0, gait: null, webSide: 'R',
+    // motion layer (moves.js, docs/motion-hooks.md): the active move, trick choice, target blend, the slingshot zip,
+    // the landing hold and the rooftop start ('play' | 'idle' on the start roof | 'tumble' off it)
+    motion: null, lastTrick: null, pendingTrick: null, targetBlend: null, zipKick: null, zipCooldown: 0, landing: null,
+    startPhase: 'play', grip: null, load: 0,
     street: makeStreet('z', 0, 1, 0), // the street frame game.js keeps current: wall runs and roof runs go along it
     bound: null }; // (pos, vel) => bool: game.js keeps the hero inside the street corridors (see boundStep)
   for (const body of Object.values(rag.bodies)) body.addEventListener('collide', e => {
@@ -57,12 +63,14 @@ export function createPhysics(p) {
   return ph;
 }
 
-// Test/setup helper (before play or between runs): carry the whole rig rigidly so the pelvis sits at pos, every body
+// Setup helper (game start, tests): carry the whole rig rigidly so the pelvis sits at pos, turned by yaw, every body
 // moving at vel. Not for use during play (that would be a teleport).
-export function placeHero(ph, p, pos, vel = { x: 0, y: 0, z: 0 }) {
-  const o = ph.hero.position, d = { x: pos.x - o.x, y: pos.y - o.y, z: pos.z - o.z };
+export function placeHero(ph, p, pos, vel = { x: 0, y: 0, z: 0 }, yaw = 0) {
+  const o = ph.hero.position.clone(), turn = new CANNON.Quaternion().setFromEuler(0, yaw, 0);
   for (const b of Object.values(ph.rag.bodies)) {
-    b.position.set(b.position.x + d.x, b.position.y + d.y, b.position.z + d.z); b.previousPosition.copy(b.position);
+    const r = turn.vmult(b.position.vsub(o));
+    b.position.set(pos.x + r.x, pos.y + r.y, pos.z + r.z); b.previousPosition.copy(b.position);
+    turn.mult(b.quaternion, b.quaternion);
     b.velocity.set(vel.x, vel.y, vel.z); b.angularVelocity.setZero();
   }
   copy(ph.hero.position, p.pos); copy(ph.hero.velocity, p.vel);
@@ -129,7 +137,7 @@ export function attach(ph, p, point, side, id) {
   eq.setSpookParams(CFG.ropeStiffness, CFG.ropeRelaxation, CFG.physicsStep); // the default assumes a 1/60 s step
   ph.world.addConstraint(ph.rope);
   ph.reelRate = 0;
-  ph.zip = null;
+  removeGrip(ph);
   ph.cornerRope = isTurnAnchor(ph, point, id);
   p.anchor = { ...point };
   p.ropePoints = [];
@@ -145,7 +153,7 @@ export function release(ph, p) {
   if (!ph.rope) return false;
   ph.world.removeConstraint(ph.rope);
   ph.rope = null;
-  ph.zip = null;
+  removeGrip(ph);
   p.anchor = null;
   p.ropePoints = [];
   p.ropeLen = 0;
@@ -155,34 +163,87 @@ export function release(ph, p) {
 
 const copy = (v, o) => { o.x = v.x; o.y = v.y; o.z = v.z; };
 
-// Zip: on = start pulling toward the anchor (held Space / a hand pull), off = stop. Does nothing without a rope.
-// It starts with a snap (zipImpulse toward the anchor), then pulls as a force, so the hero is never moved by position;
-// it ends by itself on release or near the anchor.
-export function setZip(ph, on) {
-  if (!on || !ph.rope) { ph.zip = null; return false; }
-  if (!ph.zip) {
-    ph.zip = { closing: false };
-    const d = ph.anchor.position.vsub(ph.hero.position), dist = d.length();
-    const closing = dist > 1e-6 ? d.dot(ph.hero.velocity) / dist : 0;
-    const kick = Math.min(CFG.zipImpulse, Math.max(0, CFG.zipMaxSpeed - closing)); // the snap, never past zipMaxSpeed
-    if (dist > 1e-6) impulse(ph, d.scale(kick / dist));
-  }
+// The other hand's grip: a second pull-only rope from the free hand to the same anchor body, 0.12 m further down the
+// line (a two-hand hold). It starts at the hand's current distance and closes to the grip over 0.25 s, then tracks the
+// reel. Both carry tension; release and a new attach remove both. (One rope per hand slot: dual ropes plug in here.)
+const low0 = (gr) => gr.rope.bodyA.position;
+function removeGrip(ph) {
+  if (ph.grip) ph.world.removeConstraint(ph.grip.rope);
+  ph.grip = null;
+}
+function addGrip(ph) {
+  const hand = ph.rag.bodies['hand' + (ph.webSide === 'L' ? 'R' : 'L')];
+  const rope = new CANNON.DistanceConstraint(hand, ph.anchor, hand.position.distanceTo(ph.anchor.position), CFG.ropeMaxForce);
+  rope.distanceEquation.maxForce = 0;
+  rope.distanceEquation.setSpookParams(CFG.ropeStiffness, CFG.ropeRelaxation, CFG.physicsStep);
+  ph.world.addConstraint(rope);
+  ph.grip = { rope, sec: 0, from: rope.distance };
+}
+
+// Motion layer helpers (docs/motion-hooks.md). A move's targets are sampled in `basis`; its impulses are whole-body.
+export function startMove(ph, move, basis) {
+  ph.motion = move ? { move, sec: -Number.EPSILON, basis: basis.clone() } : null;
+  ph.targetBlend = { sec: 0, from: Object.fromEntries(Object.entries(ph.rag.targets).map(([n, q]) => [n, q.clone()])) };
+}
+// Yaw basis of his travel (or of headingYaw when nearly still).
+export function travelBasis(p) {
+  const speed = Math.hypot(p.vel.x, p.vel.z);
+  return new CANNON.Quaternion().setFromEuler(0, speed > .1 ? Math.atan2(p.vel.x, p.vel.z) : (p.headingYaw || 0), 0);
+}
+// Street airtime from the lowest sole: a lower bound (drag slows the fall).
+export function airtime(ph, p) {
+  const footY = Math.min(...['footL', 'footR'].map(n => ph.rag.bodies[n].position.y - .05));
+  const vy = Math.min(0, p.vel.y);
+  return (vy + Math.sqrt(vy * vy + 2 * CFG.gravity * Math.max(0, footY))) / CFG.gravity;
+}
+
+// Zip = the slingshot: let go now and launch along the heading, tilted toward the rope (zip.js). The delta-v goes in
+// as mass-weighted whole-rig impulses over zipLaunchSteps physics steps; the rope is gone the same frame. Cooldown.
+export function launchZip(ph, p) {
+  if (!ph.rope || ph.zipCooldown > 0 || !p.alive || ph.zipKick) return false;
+  const v = comVelocity(ph), basis = travelBasis(p);
+  const facing = basis.vmult(new CANNON.Vec3(0, 0, 1));
+  const heading = Math.hypot(v.x, v.z) > .1 ? { x: v.x, y: 0, z: v.z } : facing;
+  const rd = ph.anchor.position.vsub(ph.hero.position);
+  const { dv } = zipLaunch(v, heading, { x: rd.x, y: rd.y, z: rd.z }, CFG);
+  release(ph, p);
+  ph.pendingTrick = null;
+  ph.zipCooldown = CFG.zipCooldownSec;
+  ph.zipKick = { dv, remaining: CFG.zipLaunchSteps };
+  startMove(ph, MOVES.zipYank, basis);
   return true;
 }
 
-// Zip after a step: arrived = let go before passing the anchor: within zipReleaseDist of it, within half that of
-// drawing level with it along z (a high anchor he would pass beneath), or moving away once closing.
-// So a zip at an anchor already beside or behind him just lets go.
-function zipCheck(ph, p, events) {
-  const { hero, anchor } = ph, z = ph.zip;
-  const d = anchor.position.vsub(hero.position), dist = d.length();
-  const closing = dist > 1e-6 ? d.dot(hero.velocity) / dist : 0;
-  if (closing > 1) z.closing = true;
-  const ahead = d[ph.street.axis] * ph.street.dir; // anchor still ahead along the street by this much
-  if (dist < CFG.zipReleaseDist || ahead < CFG.zipReleaseDist / 2 || (z.closing && closing <= 0)) {
-    release(ph, p); // the velocity is untouched: he flies on with all of it
-    events.push('released', 'zipped');
+// A whole-body angular impulse J about the centre of mass (adds no linear momentum).
+function angularImpulse(ph, J) {
+  const bodies = Object.values(ph.rag.bodies);
+  const mass = bodies.reduce((m, b) => m + b.mass, 0);
+  const com = bodies.reduce((v, b) => v.vadd(b.position.scale(b.mass / mass)), new CANNON.Vec3());
+  const axes = [new CANNON.Vec3(1, 0, 0), new CANNON.Vec3(0, 1, 0), new CANNON.Vec3(0, 0, 1)];
+  const I = new CANNON.Mat3();
+  for (let col = 0; col < 3; col++) {
+    const axis = axes[col], total = new CANNON.Vec3();
+    for (const b of bodies) {
+      const r = b.position.vsub(com), local = b.quaternion.conjugate().vmult(axis);
+      local.set(local.x * b.inertia.x, local.y * b.inertia.y, local.z * b.inertia.z);
+      total.vadd(b.quaternion.vmult(local), total);
+      total.vadd(r.cross(axis.cross(r)).scale(b.mass), total);
+    }
+    I.e(0, col, total.x); I.e(1, col, total.y); I.e(2, col, total.z);
   }
+  const omega = I.solve(J);
+  for (const b of bodies) {
+    b.applyImpulse(omega.cross(b.position.vsub(com)).scale(b.mass));
+    b.angularVelocity.vadd(omega, b.angularVelocity);
+  }
+}
+
+// The rooftop start: Space / open palm on the title. One back tumble off the start roof's edge, down the street.
+export function startTumble(ph, p) {
+  if (ph.startPhase !== 'idle') return false;
+  ph.startPhase = 'tumble'; p.roof = false; clearGait(ph);
+  startMove(ph, MOVES.roofTumble, new CANNON.Quaternion().setFromEuler(0, Math.PI, 0));
+  return true;
 }
 
 const comVelocity = (ph) => {
@@ -342,34 +403,90 @@ function boundStep(ph) {
   impulse(ph, { x: vel.x - v.x + push('x'), y: 0, z: vel.z - v.z + push('z') });
 }
 
+// The motion layer's state machine, once per physics step before the muscles (docs/motion-hooks.md).
+function motionStep(ph, p) {
+  const m = ph.motion;
+  if (ph.landing) return; // the landing pose holds
+  // a wall run, a roof or a new rope ends any flight move: the gait and the swing own the targets there
+  if (ph.motion && ph.startPhase === 'play' && (ph.wall || p.roof || ph.rope)) { ph.pendingTrick = null; startMove(ph, null, travelBasis(p)); }
+  if (m && m.move !== MOVES.roofIdle && m.sec >= m.move.duration) {
+    if (m.move === MOVES.roofTumble) { ph.startPhase = 'play'; p.headingYaw = 0; }
+    const next = m.move === MOVES.release ? ph.pendingTrick : null;
+    ph.pendingTrick = null;
+    if (next) ph.lastTrick = next.name;
+    startMove(ph, next, travelBasis(p));
+  }
+  // prelanding: falling free toward the street, short of the landing lead time: legs out, root upright
+  if (p.alive && ph.startPhase === 'play' && !ph.rope && !ph.wall && !p.roof && p.vel.y < 0 && ph.motion?.move !== MOVES.preland
+    && airtime(ph, p) < CFG.moves.landingLeadSec) {
+    ph.pendingTrick = null;
+    startMove(ph, MOVES.preland, travelBasis(p));
+  }
+}
+
+// Standing on the start roof (title screen): the legs carry him (a bounded support force between pelvis and soles,
+// as in the roof gait) and a soft hold keeps him at his spot on the edge. No stepping, no run.
+function standForces(ph) {
+  const root = ph.hero, hit = raycast(ph, root.position, DOWN, 1.3);
+  if (!hit) return;
+  const y = hit.point.y, feet = ['footL', 'footR'].map(n => ph.rag.bodies[n]).filter(f => f.position.y - y < .15);
+  if (!feet.length) return;
+  const M = CFG.heroMass, v = root.velocity, at = ph.standAt ?? root.position;
+  const F = new CANNON.Vec3(M * clamp(12 * (at.x - root.position.x) - 6 * v.x, -4, 4),
+    M * clamp(CFG.gravity + 90 * (y + .96 - root.position.y) - 14 * v.y, 0, 35), M * clamp(12 * (at.z - root.position.z) - 6 * v.z, -4, 4));
+  root.applyForce(F);
+  for (const f of feet) f.applyForce(F.scale(-1 / feet.length));
+}
+
+// The hero landing (after street contact): the landing move's muscles hold the pose; a bounded whole-body damping
+// (legs and arms absorbing, sole and fist friction) dissipates the travel velocity. No position is ever set.
+function landingForces(ph) {
+  const r = ph.rag.bodies;
+  for (const b of Object.values(r)) {
+    const v = b.velocity;
+    b.force.vadd(new CANNON.Vec3(-v.x * 6 * b.mass, -Math.max(0, v.y) * 6 * b.mass, -v.z * 6 * b.mass), b.force);
+  }
+  // The planted leg and the down knee carry him: a bounded support force between pelvis and those contacts (an
+  // internal pair, like the roof gait's) holds the pelvis at kneeling height instead of letting him fold flat.
+  const props = [r.footR, r.shinL].filter(b => b.position.y < .25);
+  if (!props.length) return;
+  const P = r.pelvis, fy = CFG.heroMass * clamp(CFG.gravity + 60 * (CFG.moves.landingPelvisY - P.position.y) - 10 * P.velocity.y, 0, 30);
+  P.applyForce(new CANNON.Vec3(0, fy, 0));
+  for (const b of props) b.applyForce(new CANNON.Vec3(0, -fy / props.length, 0));
+}
+
 // Advance by dt in fixed steps (leftover time carries to the next frame).
-// Events: 'bottom', 'bounce', 'dead', 'released' + 'zipped' (a zip reached its anchor), 'wallrun', 'walljump',
-// 'snapped' (the rope could not wrap around what cut it and let go).
+// Events: 'bottom', 'bounce', 'dead' + 'landingImpact' (street contact: the hero landing starts), 'released',
+// 'wallrun', 'walljump', 'snapped' (the rope could not wrap around what cut it and let go).
 export function stepPhysics(ph, p, dt) {
   const events = [];
-  const h = CFG.physicsStep, { hero } = ph;
+  const h = CFG.physicsStep, { hero } = ph, bodies = Object.values(ph.rag.bodies);
   ph.acc += Math.min(dt, CFG.maxDt);
   while (ph.acc >= h - 1e-9) {
     ph.acc -= h;
     const v = hero.velocity;
-    for (const b of Object.values(ph.rag.bodies)) {
+    for (const b of bodies) {
       const k = CFG.airDrag * b.mass * b.velocity.length();
       b.force.vsub(b.velocity.scale(k), b.force);
     }
-    if (p.alive) { wallStep(ph, p, events); gaitForces(ph, p); }
-    driveRagdoll(ph, p, h);
-    if (ph.zip) {
-      const d = ph.anchor.position.vsub(hero.position), dist = d.length();
-      if (dist > 1e-6 && d.dot(v) / dist < CFG.zipMaxSpeed) {
-        for (const b of Object.values(ph.rag.bodies)) b.force.vadd(d.scale(CFG.zipAccel * b.mass / dist), b.force);
-      }
+    const idle = ph.startPhase === 'idle', tumbling = ph.startPhase === 'tumble';
+    if (p.alive && !idle && !tumbling) { wallStep(ph, p, events); gaitForces(ph, p); }
+    if (idle) standForces(ph);
+    motionStep(ph, p);
+    driveRagdoll(ph, p, h, impulse, angularImpulse);
+    if (ph.landing) { ph.landing.sec += h; landingForces(ph); }
+    ph.zipCooldown = Math.max(0, ph.zipCooldown - h);
+    if (ph.zipKick) { // the slingshot's delta-v, split over zipLaunchSteps steps (mass-weighted: every body alike)
+      const k = ph.zipKick, n = CFG.zipLaunchSteps;
+      impulse(ph, { x: k.dv.x / n, y: k.dv.y / n, z: k.dv.z / n });
+      if (--k.remaining === 0) ph.zipKick = null;
     }
     // body English (steer.js): the same acceleration on every body (force = its mass * a), so the whole rig turns
     // as one and momentum stays physical (no internal joint load from a pelvis-only push).
     // (not on a corner tower's rope: that swing is the turn, and steering would hold him on the old street)
     if (ph.rope && !ph.cornerRope) {
       const a = steerAccel(comVelocity(ph), heading(ph.street));
-      for (const b of Object.values(ph.rag.bodies)) { b.force.x += b.mass * a.x; b.force.z += b.mass * a.z; }
+      for (const b of bodies) { b.force.x += b.mass * a.x; b.force.z += b.mass * a.z; }
     }
     if (ph.rope) {
       let len = ph.rope.distance;
@@ -378,13 +495,28 @@ export function stepPhysics(ph, p, dt) {
       ph.reelRate = d >= len - .2 ? Math.min(CFG.reelSpeed, ph.reelRate + CFG.reelAccel * h) : Math.max(0, ph.reelRate - CFG.reelAccel * h);
       if (d < len) len = Math.max(CFG.minRopeLen, d); // take up slack (no force: it never moves the hero)
       // reel in under tension (not round a corner tower: the full length carries him past its edge)
-      if (len > p.ropeMin && !ph.cornerRope) len = Math.max(p.ropeMin, len - ph.reelRate * h);
+      // (nor on a wall run: the facade holds him, and a reel against it is a tug of war on his wrist)
+      if (len > p.ropeMin && !ph.cornerRope && !ph.wall) len = Math.max(p.ropeMin, len - ph.reelRate * h);
       ph.rope.distance = p.ropeLen = len;
+      if (!ph.grip && !ph.wall) addGrip(ph); // (on a wall run one hand holds: the other is on the facade)
+      if (ph.grip && ph.wall) removeGrip(ph);
+    }
+    if (ph.grip) { // the lower grip closes onto the line 0.12 m below the upper hand, then follows the reel
+      const gr = ph.grip; gr.sec += h;
+      // (it only takes up slack: the other hand never hauls the body in faster than the reel does)
+      const u = Math.min(1, gr.sec / .25), want = ph.rope.distance + .12, at = low0(gr).distanceTo(ph.anchor.position);
+      gr.rope.distance = Math.max(CFG.minRopeLen, want, Math.min(gr.from + (want - gr.from) * u, at));
+      // the other arm brings its hand onto the line: a bounded internal pair, hand against torso (no net force)
+      const top = ph.rope.bodyA, low = gr.rope.bodyA, line = ph.anchor.position.vsub(top.position); line.normalize();
+      const goal = top.position.vsub(line.scale(.12)), d = goal.vsub(low.position);
+      const pull = d.vsub(line.scale(d.dot(line))).scale(2000 * u).vsub(low.velocity.vsub(top.velocity).scale(60 * u));
+      const n = pull.length(); if (n > 500) pull.scale(500 / n, pull);
+      low.applyForce(pull); ph.rag.bodies.chest.applyForce(pull.negate()); // (the arm's reaction is on the torso)
     }
     // Fast limbs need smaller collision steps: joint impulses can accelerate a hand after the sweep.
-    const maxTravel = Math.max(...Object.values(ph.rag.bodies).map(b => b.velocity.length() * h));
+    const maxTravel = Math.max(...bodies.map(b => b.velocity.length() * h));
     const steps = Math.max(1, Math.min(8, Math.ceil(maxTravel / .12))), sub = h / steps;
-    const loads = Object.values(ph.rag.bodies).map(b => [b, b.force.clone(), b.torque.clone()]);
+    const loads = bodies.map(b => [b, b.force.clone(), b.torque.clone()]);
     const grip = ph.rope?.bodyA.position, P0 = grip && { x: grip.x, y: grip.y, z: grip.z };
     const q = hero.position, reach = 2.5 + 8 * maxTravel; // the rig's size plus several steps of travel
     const near = [];
@@ -397,19 +529,37 @@ export function stepPhysics(ph, p, dt) {
       sweepContacts(ph, sub, near);
       ph.world.step(sub);
     }
-    if (ph.bound) boundStep(ph);
-    if (ph.rope && !ropeStep(ph, p, P0, STRUCT)) { release(ph, p); events.push('snapped'); } // can't bend around it
-    if (ph.zip) zipCheck(ph, p, events);
+    if (ph.bound && !idle) boundStep(ph);
+    if (ph.rope) {
+      const free = ph.rope.distance;
+      if (!ropeStep(ph, p, P0, STRUCT)) { release(ph, p); events.push('snapped'); } // can't bend around it
+      else if (ph.grip) ph.grip.rope.distance += ph.rope.distance - free; // a wrap moves both grips' pivot
+    }
+    // The rope's tension drives the strain pose (smoothed over ~0.1 s). Taut, the rope carries the swing's centripetal
+    // force plus gravity along it: T = M (|v|^2 - (v.u)^2) / L + M g (-u_y), u = pivot -> hero. (The solver's
+    // multipliers of the last substep flicker to 0 between substeps, so this is read off the motion instead.)
+    let tension = 0;
+    if (ph.rope) {
+      const cv = comVelocity(ph), r = hero.position.vsub(ph.anchor.position), L = r.length();
+      if (L > 1e-6 && ph.rope.bodyA.position.distanceTo(ph.anchor.position) >= ph.rope.distance - .05) {
+        const u = r.scale(1 / L), vu = cv.x * u.x + cv.y * u.y + cv.z * u.z, v2 = cv.x * cv.x + cv.y * cv.y + cv.z * cv.z;
+        tension = Math.max(0, CFG.heroMass * ((v2 - vu * vu) / L - CFG.gravity * u.y));
+      }
+    }
+    ph.load += (Math.min(1, tension / CFG.moves.strainForce) - ph.load) * Math.min(1, h / .1);
     if (ph.rope) {
       if (v.y <= 0) p.sawDescent = true;
       if (p.swingPhase === 'descending' && p.sawDescent && v.y > 0) { p.swingPhase = 'ascending'; events.push('bottom'); }
     }
-    // Only an upward facade/roof contact can start roof locomotion.
-    p.roof = p.alive && !ph.wall && !ph.rope && hero.position.y > 1.2 && !!raycast(ph, hero.position, DOWN, 1.12);
-    const touchedStreet = Object.values(ph.rag.bodies).some(b => b.position.y < .12);
+    // Only an upward facade/roof contact can start roof locomotion (not mid-tumble off the start roof).
+    p.roof = p.alive && !tumbling && !ph.wall && !ph.rope && hero.position.y > 1.2 && !!raycast(ph, hero.position, DOWN, 1.12);
+    const touchedStreet = bodies.some(b => b.position.y < .12);
     if (p.alive && touchedStreet) {
       release(ph, p); clearGait(ph); ph.wall = null; p.wall = 0; p.roof = false;
-      p.alive = false; events.push('dead');
+      p.alive = false; ph.pendingTrick = null; ph.zipKick = null;
+      ph.landing = { sec: 0, at: { x: hero.position.x, y: 0, z: hero.position.z } };
+      startMove(ph, MOVES.landing, travelBasis(p));
+      events.push('dead', 'landingImpact');
     }
   }
   if (ph.bounced) { ph.bounced = false; events.push('bounce'); }

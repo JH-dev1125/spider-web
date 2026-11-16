@@ -1,5 +1,5 @@
 import { CFG } from './config.js';
-import { createGame, stepGame, createBot } from './game.js';
+import { createGame, stepGame, createBot, startGame } from './game.js';
 import { createChargeTracker } from './input-core.js';
 import { attachKeyboard } from './keyboard.js';
 import { startHand } from './hand.js';
@@ -48,8 +48,9 @@ const now = () => performance.now() / 1000;
 
 let mode = 'title'; // 'title' | 'play' | 'over'
 const seedOf = () => Number(q.get('seed')) || Date.now(); // ?seed=<n>: a fixed city (screenshots)
-let g = createGame(seedOf());
-let actions = []; // input queue for stepGame: {type:'press'|'release'|'zip'|'zipEnd', ...}
+const newGame = () => createGame(seedOf(), { start: 'roof' }); // the hero idles on the start roof's edge
+let g = newGame();
+let actions = []; // input queue for stepGame: {type:'press'|'release'|'zip', ...}
 let overSec = 0;
 let result = null;
 let bot = null;
@@ -79,8 +80,10 @@ window.addEventListener('keydown', (e) => {
     .catch((err) => { clearTimeout(timer); if (attempt === id) { console.warn('hand mode unavailable:', err); hand = 'failed'; } });
 });
 
+// From the title: the same game - the hero back-tumbles off the start roof. From the result screen: a new game.
 function start() {
-  g = createGame(seedOf());
+  if (mode === 'over') g = newGame();
+  startGame(g);
   actions = [];
   tracker.cancel(); // a key held through death must not release anything on the first frame
   bot = autoplay ? createBot({ zip: q.has('autozip'), turn: q.has('autoturn') ? q.get('autoturn') || 'alt' : null }) : null;
@@ -91,10 +94,12 @@ window.addEventListener('keydown', (e) => {
   if (e.code !== 'Space' && e.code !== 'Enter') return;
   e.preventDefault();
   if (e.repeat) return;
-  if (mode === 'title' || (mode === 'over' && overSec >= overGate)) start();
+  if (mode === 'title' || (mode === 'over' && landed() && overSec >= overGate)) start();
 });
 
-const overGate = Math.max(CFG.overInputDelaySec, CFG.overFallSec); // restart only after the result is on screen
+// The result appears once the hero landing has settled (the pose holds on under it); restart only after that.
+const landed = () => (g.phys.landing?.sec ?? 0) >= CFG.moves.landingSettleSec;
+const overGate = CFG.overInputDelaySec;
 const H = CFG.hud;
 function lines(list) { // [text, px, color, bold] stacked around the screen centre
   const step = (px) => px * H.lineGap;
@@ -120,7 +125,7 @@ function drawHud() {
     ctx.textAlign = 'right';
     ctx.fillText(`BEST ${score.best()} m`, w - H.margin, H.margin);
   }
-  const showResult = mode === 'over' && overSec >= CFG.overFallSec;
+  const showResult = mode === 'over' && landed();
   if (mode === 'play' || (mode === 'over' && !showResult)) return;
   ctx.fillStyle = H.backdrop;
   ctx.fillRect(0, 0, w, h);
@@ -130,11 +135,11 @@ function drawHud() {
       ['왼쪽 Q · A · Z   /   오른쪽 E · D · C   (위 · 가운데 · 아래)', H.textPx, H.color],
       ['W: 정면 위로 — 길 위의 크레인 · 구름다리에 줄', H.textPx, H.color],
       ['누르면 즉시 거미줄 → 누르고 있는 동안 스윙 → 떼면 날아감', H.textPx, H.color],
-      ['줄이 붙은 채 Space: 줄 당기기 (앵커에 가까워지면 저절로 놓고 날아감)', H.textPx, H.color],
-      coarse ? ['PC(키보드/웹캠)에서 열어주세요', H.hudPx, H.accent, true] : ['Space: 키보드로 시작', H.hudPx, H.accent, true],
+      ['Space / 손 당기기: 줄을 놓으며 앞으로 발사 (새총)', H.textPx, H.color],
+      coarse ? ['PC(키보드/웹캠)에서 열어주세요', H.hudPx, H.accent, true] : ['Space: 옥상에서 뒤로 공중제비하며 시작', H.hudPx, H.accent, true],
       ['바닥에 닿으면 끝 · 너무 오래 잡고 있으면 뒤로 되돌아가요', H.textPx, H.color],
       hand === 'on' && ['검지·새끼 펴면 발사, 유지하면 스윙, 풀면 날아감 (미리보기 속 손 위치 = 방향, 가운데 칸 = W)', H.textPx, H.color],
-      hand === 'on' && ['발사 자세로 손을 몸 쪽으로 확 당기면 줄 당기기', H.textPx, H.color],
+      hand === 'on' && ['발사 자세로 손을 몸 쪽으로 확 당기면 새총 발사', H.textPx, H.color],
       {
         off: ['H: 손동작 켜기', H.textPx, H.color],
         loading: ['웹캠 준비 중…', H.textPx, H.dim],
@@ -176,10 +181,10 @@ function drawHandStatus() { // text just above the mirrored preview (bottom-righ
 
 function update(dt) {
   // open palm on the title or the result screen = Space
-  const palmOk = mode === 'title' || (mode === 'over' && overSec >= CFG.overFallSec);
+  const palmOk = mode === 'title' || (mode === 'over' && landed());
   palmSec = palmOk && handStatus?.open ? palmSec + dt : 0;
   if (palmSec >= CFG.handRestartSec) { palmSec = 0; start(); }
-  if (mode === 'title') return;
+  if (mode === 'title') { stepGame(g, dt, []); return; } // he idles on the roof under the title
   if (bot && g.elapsed < botSec) actions.push(...bot(g, dt));
   const events = stepGame(g, dt, actions);
   actions = [];
@@ -209,6 +214,8 @@ function frame() {
     street: g.street,
     distance: g.distance,
     seed: g.world.seed,
+    landing: g.phys.landing, // { sec, at } after street contact: dust and the camera dip
+    title: mode === 'title',
   }, dt);
   ctx.clearRect(0, 0, w, h);
   drawHud();

@@ -1,6 +1,7 @@
 ﻿import * as C from '../vendor/cannon-es.js';
 import { CFG } from './config.js';
 import { yawOf, right } from './street.js';
+import { MOVES, sampleMove, moveImpulses } from './moves.js';
 
 // Rest centres in metres, pelvis origin, +y head-up, +z chest/forward. Shared by physics and skin.
 export const ANATOMY = [
@@ -33,6 +34,11 @@ export function makeRagdoll(world, p, material, footMaterial) {
       collisionFilterGroup: 1, collisionFilterMask: 2 | 4, allowSleep: false });
     // Boxes give reliable narrow-phase contacts at high speed; the skin rounds their silhouette.
     b.addShape(new C.Box(V(a.size)));
+    // Inertia floor (a standard ragdoll stabiliser): a 0.6 kg hand hanging the whole body off a stiff rope jitters
+    // in the iterative solver at its true inertia; raising it changes the spin of light segments only, not the motion.
+    const F = CFG.inertiaFloor;
+    { b.inertia.set(Math.max(F, b.inertia.x), Math.max(F, b.inertia.y), Math.max(F, b.inertia.z));
+      b.invInertia.set(1 / b.inertia.x, 1 / b.inertia.y, 1 / b.inertia.z); b.updateInertiaWorld(true); }
     b.part = a.name;
     world.addBody(b); bodies[a.name] = b;
     if (a.parent) {
@@ -54,11 +60,20 @@ export function makeRagdoll(world, p, material, footMaterial) {
       world.addConstraint(joint); joints.push({ a, parent, body: b, joint });
     }
   }
-  return { bodies, joints, targets: Object.fromEntries(ANATOMY.map(a => [a.name, new C.Quaternion()])), time: 0 };
+  // the whole rig's inertia about the pelvis (smallest principal axis, roughly): the root muscle's scale
+  const rootInertia = Object.values(bodies).reduce((s, b) => s + minInertia(b) + b.mass * b.position.distanceSquared(bodies.pelvis.position), 0) / 2;
+  return { bodies, joints, rootInertia, targets: Object.fromEntries(ANATOMY.map(a => [a.name, new C.Quaternion()])), time: 0 };
 }
 
-// Quaternion error -> critically damped, torque-limited PD muscle. No body transforms are assigned.
-function muscle(body, target, parent, kp, kd, limit) {
+// Quaternion error -> torque-limited PD muscle. No body transforms are assigned.
+// Gains are capped by the smaller rotational inertia of the pair (kp <= k*I, kd <= c*I, CFG.muscle): an explicit PD
+// on a 0.6 kg hand with trunk gains rings to hundreds of rad/s in one step; scaled, every joint has the same
+// natural frequency (sqrt(k)) and damping ratio (c / 2 sqrt(k)) and stays stable at the physics step.
+// inertia: overrides the pair's (the root muscle turns the whole rig through its stiff joints).
+const minInertia = (b) => Math.min(b.inertia.x, b.inertia.y, b.inertia.z);
+function muscle(body, target, parent, kp, kd, limit, inertia) {
+  const I = inertia ?? Math.min(minInertia(body), parent ? minInertia(parent) : Infinity);
+  kp = Math.min(kp, CFG.muscle.k * I); kd = Math.min(kd, CFG.muscle.c * I);
   const inv = body.quaternion.conjugate(), error = target.mult(inv);
   const sign = error.w < 0 ? -1 : 1;
   const w = body.angularVelocity.vsub(parent?.angularVelocity || C.Vec3.ZERO);
@@ -85,11 +100,13 @@ function legTargets(rag, side, goal, basis) {
   rag.targets['foot' + side].copy(basis);
 }
 
-export function driveRagdoll(ph, p, h) {
+const strainTargets = {};
+// impulse(ph, dv) / angularImpulse(ph, J): player.js's whole-body impulses, passed in (no import cycle).
+// Muscles stay on after death: the landing pose is held by them (docs/motion-hooks.md C).
+export function driveRagdoll(ph, p, h, impulse, angularImpulse) {
   const r = ph.rag, b = r.bodies, t = r.targets;
   r.time += h;
   r.modeTime = r.mode === p.mode ? (r.modeTime || 0) + h : 0; r.mode = p.mode;
-  if (!p.alive) return; // death keeps anatomical limits, removes every muscle
   // Every pose is authored facing +z; `yaw` turns it to face down the current street (street.js).
   const st = ph.street, yaw = new C.Quaternion(), basis = new C.Quaternion();
   if (st) yaw.setFromAxisAngle(UP, yawOf(st));
@@ -104,18 +121,27 @@ export function driveRagdoll(ph, p, h) {
     const tilt = new C.Quaternion(); tilt.setFromVectors(UP, up); tilt.mult(yaw, basis); // yaw first, then lean up the rope
   }
   if (!ph.wall && !p.roof && !p.anchor) {
-    if (p.mode === 'roll') basis.setFromAxisAngle(new C.Vec3(0, 0, 1), r.modeTime * Math.PI * 2 / CFG.trickSec);
-    else if (p.mode === 'glide') basis.setFromEuler(.35, 0, 0);
+    if (p.mode === 'glide') basis.setFromEuler(.35, 0, 0);
   }
   if (ph.wall || p.roof || !p.anchor) yaw.mult(basis, basis);
   for (const a of ANATOMY) t[a.name].copy(basis);
   for (const side of ['L', 'R']) {
     const sd = side === 'L' ? -1 : 1;
     const upper = t['upperArm' + side], lower = t['forearm' + side];
-    const isWeb = ph.rope && side === ph.webSide;
+    const isWeb = ph.rope && (side === ph.webSide || ph.grip);
     if (isWeb) {
+      // Both hands on the line (two-hand grip): reach for the pivot; under load the elbows straighten (ph.load =
+      // the ropes' solved tension / strainForce), slack they stay bent.
       const sh = b.chest.pointToWorldFrame(new C.Vec3(sd * .24, .18, 0));
-      limbTarget(upper, sh, ph.anchor.position); lower.copy(upper); t['hand' + side].copy(upper);
+      // the upper hand reaches for the pivot; the other for the line 0.12 m below the upper hand
+      let goal = ph.anchor.position;
+      if (side !== ph.webSide) {
+        const top = b['hand' + ph.webSide].position, u = goal.vsub(top); u.normalize();
+        goal = top.vsub(u.scale(.12));
+      }
+      limbTarget(upper, sh, goal);
+      const q = new C.Quaternion(); q.setFromEuler(-.7 * (1 - (ph.load || 0)), 0, 0); upper.mult(q, lower);
+      t['hand' + side].copy(lower);
     } else {
       const q = new C.Quaternion();
       q.setFromEuler(-.25, 0, sd * (ph.wall || p.roof ? .25 : 1.05)); basis.mult(q, upper);
@@ -132,13 +158,42 @@ export function driveRagdoll(ph, p, h) {
       q.setFromEuler(.35, 0, 0); t['thigh' + side].mult(q, t['shin' + side]); t['foot' + side].copy(t['shin' + side]);
     }
   }
-  // Balance assistance supplies an upright reference; joints still react against one another.
-  muscle(b.pelvis, basis, null, ph.wall || p.roof ? 1600 : 180, ph.wall || p.roof ? 110 : 25, ph.wall || p.roof ? 650 : 100);
+  if (ph.rope && !ph.wall) {
+    // the swing strain (moves.js): chest crunch, head duck and knee tuck with the rope's load; the arms keep their reach
+    sampleMove(MOVES.swingStrain, (ph.load || 0) * MOVES.swingStrain.duration, basis, strainTargets);
+    for (const n of ['chest', 'head', 'thighL', 'thighR', 'shinL', 'shinR', 'footL', 'footR']) t[n].copy(strainTargets[n]);
+  }
+  // The motion layer: a move's targets replace these (tricks, release, zip yank, landing, the rooftop idle/tumble).
+  const motion = ph.motion;
+  if (motion) {
+    const prev = motion.sec, m = motion.mirror || 1;
+    motion.sec = Math.max(0, prev) + h;
+    for (const e of moveImpulses(motion.move, prev, motion.sec, m)) {
+      if (e.linear) impulse(ph, motion.basis.vmult(new C.Vec3(...e.linear)));
+      if (e.angular) angularImpulse(ph, motion.basis.vmult(new C.Vec3(...e.angular)));
+    }
+    const spinning = motion.move.impulses.some(e => e.angular);
+    const sec = motion.move === MOVES.roofIdle ? motion.sec % motion.move.duration : motion.sec;
+    sampleMove(motion.move, sec, spinning ? b.pelvis.quaternion : motion.basis, t, { mirror: m });
+  }
+  if (ph.targetBlend) {
+    const blend = ph.targetBlend;
+    blend.sec += h;
+    const u = Math.min(1, blend.sec / CFG.moves.blendSec);
+    for (const name of Object.keys(t)) blend.from[name].slerp(t[name], u, t[name]);
+    if (u === 1) ph.targetBlend = null;
+  }
+  // Balance assistance supplies an upright reference (t.pelvis); joints still react against one another. Off while a
+  // move spins him (it would fight the flip); stiff for the landing hold and on walls and roofs.
+  const spinning = motion && motion.sec < motion.move.duration && motion.move.impulses.some(e => e.angular);
+  const firm = ph.landing || ph.wall || p.roof;
+  if (!spinning) muscle(b.pelvis, t.pelvis, null, firm ? 1600 : 180, firm ? 110 : 25, firm ? 650 : 100, ph.landing ? CFG.moves.landingRootInertia : r.rootInertia);
   for (const j of r.joints) {
     const desired = t[j.a.parent].conjugate().mult(t[j.a.name]);
     const target = j.parent.quaternion.mult(desired);
     const leg = /thigh|shin/.test(j.a.name), trunk = j.a.name === 'chest';
-    const kp = trunk ? (ph.wall ? 900 : 380) : leg ? 250 : (ph.wall && j.a.name === 'head' ? 150 : 65);
+    const stiff = ph.landing && ph.landing.sec < CFG.moves.landingStiffSec ? 2 : 1; // the impact, then the hold
+    const kp = stiff * (trunk ? (ph.wall ? 900 : 380) : leg ? 250 : (ph.wall && j.a.name === 'head' ? 150 : 65));
     const kd = trunk ? (ph.wall ? 50 : 25) : leg ? 18 : (ph.wall && j.a.name === 'head' ? 10 : 4);
     muscle(j.body, target, j.parent, kp, kd, trunk ? (ph.wall ? 400 : 200) : leg ? 130 : 65);
   }

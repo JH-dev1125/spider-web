@@ -65,11 +65,14 @@ export function followCamera(player, prev, dt, structures = [], street = START) 
   const off = toLocal(street, player.pos).x; // across his street, from its centreline
   const fov = R.fovMin + (R.fovMax - R.fovMin) * speedK(vel);
   const x = pos.x - Math.sign(off) * Math.min(Math.abs(off) * R.camWallGap / CFG.corridorHalfWidth, R.camWallGap);
-  const y = pos.y + R.camUp, z = pos.z - R.camBack;
+  // on a rope, the camera drops below his level and looks up toward the anchor, so a high web's splat stays in the
+  // frame (up: 0 with no rope or a level anchor, 1 for one 30 m or more above him)
+  const up = player.anchor ? Math.max(0, Math.min(1, (player.anchor.y - player.pos.y) / 30)) : 0;
+  const y = pos.y + R.camUp - up * R.camAttachDrop, z = pos.z - R.camBack;
   // look down the street, halfway between the camera's line and the hero's (he hugs a wall: still near the middle)
   // sideways and up/down the lead is capped, or a fast zip, fall or wall jump swings the hero to the frame's edge
   const side = (v) => Math.max(-R.lookMaxSide, Math.min(R.lookMaxSide, v * R.lookAhead));
-  const lx = (x + pos.x) / 2 + side(vel.x), ly = pos.y + R.lookUp + side(vel.y), lz = pos.z + Math.max(vel.z * R.lookAhead, R.camBack * 0.6);
+  const lx = (x + pos.x) / 2 + side(vel.x), ly = pos.y + R.lookUp + up * R.camAttachLift + side(vel.y), lz = pos.z + Math.max(vel.z * R.lookAhead, R.camBack * 0.6);
   const pc = prev && toL(prev), pl = prev && toL({ x: prev.lx, y: prev.ly, z: prev.lz });
   // no prev, or a restart teleported the hero: snap
   const snap = !prev || Math.hypot(pc.x - x, pc.y - y, pc.z - z) > R.camSnap;

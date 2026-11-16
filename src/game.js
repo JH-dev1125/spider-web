@@ -31,17 +31,16 @@
 import { CFG } from './config.js';
 import { makeRng, createWorld, updateWorld, clampToStreets, corridorAt, lineAt, lineIndex, centreKind,
   crossKind, cornerOf } from './world.js';
-import { createPlayer, createPhysics, syncStructures, raycast, attach, release, stepPhysics, setZip, isTurnAnchor } from './player.js';
+import { createPlayer, createPhysics, syncStructures, raycast, attach, release, stepPhysics, isTurnAnchor, launchZip, startMove,
+  travelBasis, airtime, startTumble, placeHero } from './player.js';
+import { MOVES, pickTrick } from './moves.js';
 import { aimVector } from './web.js';
 import { surfaceNormal } from './render-math.js';
 import { makeStreet, heading, right, toLocal, toLocalVec, toWorldVec } from './street.js';
 
-export const pickTrickPose = (rng) => {
-  const t = CFG.character.tricks;
-  return t[Math.min(t.length - 1, Math.floor(rng() * t.length))];
-};
-
-export function createGame(seed) {
+// start: 'air' (default: mid-air at startHeight, flying at startSpeed - the test courses) or 'roof' (the game:
+// standing on the start tower's edge, facing back over the roof, until startGame tumbles him off it).
+export function createGame(seed, { start = 'air' } = {}) {
   const player = createPlayer();
   const g = {
     rng: makeRng(seed),
@@ -61,8 +60,18 @@ export function createGame(seed) {
   g.phys.bound = (pos, vel) => !g.world.fixed && clampToStreets(seed, pos, vel);
   updateWorld(g.world, player.pos, g.street);
   syncStructures(g.phys, g.world.structures);
+  if (start === 'roof') {
+    const top = g.world.start.max.y, edge = g.world.start.max.z;
+    placeHero(g.phys, player, { x: 0, y: top + 1.02, z: edge - .35 }, { x: 0, y: 0, z: 0 }, Math.PI); // heels at the edge
+    g.phys.standAt = g.phys.hero.position.clone();
+    player.headingYaw = Math.PI; g.phys.startPhase = 'idle'; g.pose = 'idle';
+    startMove(g.phys, MOVES.roofIdle, travelBasis(player));
+  }
   return g;
 }
+
+// Space / open palm on the title: the back tumble off the start roof (same game, same hero).
+export const startGame = (g) => startTumble(g.phys, g.player);
 
 const hand = (p, side = p.webSide) => {
   const v = p.ragdoll?.['hand' + side]?.position;
@@ -107,10 +116,11 @@ function flyWeb(g, dt) {
   g.missLine = { to: w.to, age: 0 };
 }
 
-// actions: [{type: 'press', side, level} | {type: 'release'} | {type: 'zip'} | {type: 'zipEnd'}]. A press launches a web
-// (fixed range); a release lets go of the rope and cancels a web still in flight; zip pulls hard along the attached rope
-// until zipEnd, a release, or passing the anchor (then the rope lets go by itself); without a rope zip does nothing.
-// Returns events ('bottom', 'released', 'zipped', 'bounce', 'wallrun', 'walljump', 'snapped', 'turned', 'dead').
+// actions: [{type: 'press', side, level} | {type: 'release'} | {type: 'zip'}]. A press launches a web (fixed range) and
+// cancels a running trick; a release lets go of the rope (a trick may follow) and cancels a web still in flight; zip is
+// the slingshot: let go and launch forward, tilted toward the rope (player.launchZip; a cooldown; no rope = nothing).
+// Returns events ('bottom', 'released', 'zipped', 'bounce', 'wallrun', 'walljump', 'snapped', 'turned', 'dead',
+// 'landingImpact').
 export function stepGame(g, dt, actions) {
   dt = Math.min(dt, CFG.maxDt);
   const p = g.player;
@@ -120,13 +130,30 @@ export function stepGame(g, dt, actions) {
     g.elapsed += dt;
     updateWorld(g.world, p.pos, g.street);
     syncStructures(g.phys, g.world.structures);
+    const ph = g.phys;
     for (const a of actions) {
-      if (a.type === 'press') fire(g, a);
-      else if (a.type === 'release') {
+      if (ph.startPhase === 'idle') continue; // on the start roof only startGame acts
+      if (a.type === 'press') {
+        // a press cancels a trick (or the release flourish, or the tumble) at once, even if the shot misses
+        if (ph.motion?.move.cancelOnPress || ph.motion?.move === MOVES.release || ph.startPhase === 'tumble') {
+          ph.pendingTrick = null; ph.startPhase = 'play'; p.headingYaw = 0;
+          startMove(ph, null, travelBasis(p));
+        }
+        fire(g, a);
+      } else if (a.type === 'release') {
         g.web = null;
-        if (release(g.phys, p)) events.push('released');
-      } else if (a.type === 'zip') setZip(g.phys, true);
-      else if (a.type === 'zipEnd') setZip(g.phys, false);
+        if (release(ph, p)) {
+          // the trick for this flight, if the street is far enough below (moves.js); it starts after the release
+          const left = Math.max(0, airtime(ph, p) - MOVES.release.duration);
+          ph.pendingTrick = pickTrick(g.rng, ph.lastTrick, left);
+          startMove(ph, MOVES.release, travelBasis(p));
+          ph.motion.mirror = p.webSide === 'L' ? -1 : 1;
+          events.push('released');
+        }
+      } else if (a.type === 'zip' && launchZip(ph, p)) {
+        g.web = null; events.push('released', 'zipped');
+        g.shake = Math.max(g.shake, CFG.render.shakePeak);
+      }
     }
     p.mode = g.pose;
     const before = { ...p.pos }, pivot = p.ropePoints.at(-1) ?? p.anchor;
@@ -137,15 +164,18 @@ export function stepGame(g, dt, actions) {
     if (events.includes('snapped')) g.missLine = { to: { ...pivot }, age: 0 };
     if (g.web && p.alive) flyWeb(g, dt);
     if (events.includes('bottom')) g.shake = CFG.render.shakePeak;
+    if (events.includes('landingImpact')) g.shake = CFG.render.shakePeak; // (dust and the camera dip: render.js)
     if (events.includes('bounce')) g.shake = Math.max(g.shake, CFG.render.bounceShake);
-    if (events.includes('released')) { g.pose = pickTrickPose(g.rng); g.trickSec = CFG.trickSec; }
     if (events.includes('walljump')) { g.pose = 'walljump'; g.trickSec = CFG.trickSec; }
   } else { g.web = null; stepPhysics(g.phys, p, dt); }
   g.trickSec = Math.max(0, g.trickSec - dt);
-  if (!p.alive) g.pose = 'fall';
+  const move = g.phys.motion?.move;
+  if (!p.alive) g.pose = 'landing';
+  else if (g.phys.startPhase !== 'play') g.pose = g.phys.startPhase; // 'idle' | 'tumble'
   else if (p.wall) g.pose = 'wallrun';
   else if (p.roof) g.pose = 'run';
   else if (p.anchor) g.pose = 'swing';
+  else if (move?.trick) g.pose = 'trick';
   else if (g.trickSec === 0) g.pose = 'glide';
   if (g.missLine && (g.missLine.age += dt) > CFG.missShowSec) g.missLine = null;
   return events;
@@ -199,7 +229,7 @@ export function createBot({ zip = false, turn = null } = {}) {
   return (g, dt) => {
     const p = g.player;
     dt = Math.min(dt, CFG.maxDt);
-    if (!p.alive) return [];
+    if (!p.alive || g.phys.startPhase !== 'play') return []; // (waits out the rooftop tumble)
     if (turning) {
       if (held && g.web) return [];
       turning.sec += dt;
@@ -222,7 +252,7 @@ export function createBot({ zip = false, turn = null } = {}) {
         }
       }
     }
-    if (zip && held && p.anchor && zipped !== p.anchor && p.anchor.y > p.pos.y + 5 && p.anchor.z > p.pos.z + 10) { zipped = p.anchor; return [{ type: 'zip' }]; }
+    if (zip && held && p.anchor && zipped !== p.anchor && p.anchor.y > p.pos.y + 5 && toLocal(g.street, p.anchor).z > toLocal(g.street, p.pos).z + 10) { zipped = p.anchor; return [{ type: 'zip' }]; }
     if (p.wall) return []; // keep the web through the stance; foot-induced velocity is not a swing bottom
     if (held && p.anchor) {
       const v = p.vel, speed = Math.hypot(v.x, v.y, v.z);
