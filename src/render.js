@@ -221,7 +221,7 @@ export function createRenderer(canvas) {
   // squeezed into the middle of the city block it lands in, behind the street lots: never on a street
   const SKY = Array.from({ length: R.skylineCount }, (_, i) => {
     const h = (k) => hash01(i * 7 + k + 9001);
-    const s = { x: h(1) * R.skylineSpan, z: h(2) * R.skylineSpan, w: 18 + 34 * h(3), d: 18 + 34 * h(4), h: 40 + 290 * h(5) * h(0) };
+    const s = { x: h(1) * R.skylineSpan, z: h(2) * R.skylineSpan, w: 24 + 44 * h(3), d: 24 + 44 * h(4), h: 90 + 640 * h(5) * h(0) }; // (2.2x city)
     writeInfo(skylineInfo, i, skyTints[i % skyTints.length], Math.floor(h(6) * 3) + h(7) * 0.99);
     return s;
   });

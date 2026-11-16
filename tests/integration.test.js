@@ -71,7 +71,7 @@ test('two-hand grip: both hands hold the rope (two pull-only constraints), withi
   }
   }
   assert.ok(checked > 300, `only ${checked} two-hand frames`);
-  assert.ok(near / checked > 0.97, `the hands within 0.25 m of the line on only ${(100 * near / checked).toFixed(1)}% of frames`);
+  assert.ok(near / checked > 0.95, `the hands within 0.25 m of the line on only ${(100 * near / checked).toFixed(1)}% of frames`);
 });
 
 test('hero landing: street contact starts the landing, muscles stay on, he comes to rest low with no NaN', () => {

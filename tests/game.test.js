@@ -197,10 +197,10 @@ test('a miss shows a missLine that expires after missShowSec', () => {
 test('webs: frames refuse them, the open middle lets them through, cranes and skybridges hold', () => {
   const g = createGame(1);
   const frame = [
-    block('F:post0', 'frame', { x: W, y: 0, z: 40 }, { x: W + 1.6, y: 62, z: 41.6 }),
-    block('F:beam0', 'frame', { x: W, y: 60, z: 40 }, { x: W + 1.6, y: 62, z: 70 }),
+    block('F:post0', 'frame', { x: W, y: 0, z: 20 }, { x: W + 1.6, y: 202, z: 21.6 }), // the web meets x = W at z ~40,
+    block('F:beam0', 'frame', { x: W, y: 200, z: 20 }, { x: W + 1.6, y: 202, z: 70 }), // between the post and under the beam
   ];
-  course(g, [...frame, block('B:base', 'tower', { x: W + 10, y: 0, z: 0 }, { x: W + 30, y: 120, z: 300 })]);
+  course(g, [...frame, block('B:base', 'tower', { x: W + 10, y: 0, z: 0 }, { x: W + 30, y: 300, z: 300 })]);
   stepGame(g, DT, [shot('R', 'mid')]);
   assert.ok(g.web.hit && Math.abs(g.web.to.x - W - 10) < 1e-6, 'through the frame onto the tower behind');
   const g2 = createGame(1);
@@ -418,8 +418,8 @@ test('standing on a roof with no rope shows the run pose', () => {
 
 test('W: a web straight ahead and up lands on a crane jib over the street and swings the hero under it', () => {
   const g = createGame(1);
-  const jibY = 70, hand = g.phys.rag.bodies.handR.position;
-  const zc = hand.z + (jibY - hand.y) / Math.tan(CFG.aimUpDeg.mid * Math.PI / 180), z0 = zc - 1.5, z1 = zc + 1.5; // where the W web meets y = 70
+  const hand = g.phys.rag.bodies.handR.position, jibY = hand.y + 30;
+  const zc = hand.z + (jibY - hand.y) / Math.tan(CFG.aimUpDeg.mid * Math.PI / 180), z0 = zc - 1.5, z1 = zc + 1.5; // where the W web meets the jib
   course(g, [
     block('K:mast', 'crane', { x: W + 3, y: 0, z: z0 }, { x: W + 6, y: jibY, z: z1 }),
     block('K:jib', 'crane', { x: -10, y: jibY, z: z0 }, { x: W + 14, y: jibY + 3, z: z1 }),
