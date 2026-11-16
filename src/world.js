@@ -7,6 +7,7 @@
 // ramp. Everything is a pure function of (seed, grid coordinates), so any route sees the same city; only the
 // segments near the hero exist at a time.
 import { CFG } from './config.js';
+import { buildBuilding } from './archetypes.js';
 
 // mulberry32
 const STEP = 0x6D2B79F5;
@@ -134,6 +135,16 @@ const box = (w, id, kind, sd, a, b, y0, y1, v0, v1, attach) => {
   return s;
 };
 
+// The footprint of a lot on side sd, depth metres deep, v0..v1 along the street, for archetypes.buildBuilding
+// (world footprint + streetSide = the street face's outward normal, so it works on x- and z-streets alike).
+const lotOf = (w, id, sd, depth, v0, v1) => {
+  const s = box(w, id, 'tower', sd, W, W + depth, 0, 0, v0, v1, true);
+  return { id: s.id, x0: s.min.x, x1: s.max.x, z0: s.min.z, z1: s.max.z, streetSide: s.face };
+};
+
+// A lot clipped short at a corner can leave an archetype part with no room (size <= 0): drop those parts.
+const building = (fp, h, rng, d) => buildBuilding(fp, h, rng, d).filter((b) => ['x', 'y', 'z'].every((k) => b.max[k] - b.min[k] > 0.05));
+
 const lotLen = (rng, kind) => (kind === 'tower' || kind === 'low' ? range(rng, L.towerLen)
   : kind === 'frame' ? range(rng, L.frameLen) : kind === 'crane' ? L.craneLot : range(rng, L.gapLen));
 
@@ -141,14 +152,7 @@ function tower(w, side, sd, id, z0, z1, d) {
   const { rng, structures: out } = w;
   const h = range(rng, d.towerH);
   const depth = range(rng, L.depth);
-  out.push(box(w, `${id}:base`, 'tower', sd, W, W + depth, 0, h, z0, z1, true));
-  if (rng() < L.setbackChance && z1 - z0 > 6) {
-    out.push(box(w, `${id}:setback`, 'setback', sd, W + range(rng, L.setbackInset), W + depth, h, h + range(rng, L.setbackH), z0 + 2, z1 - 2, true));
-  }
-  if (rng() < L.ledgeChance && z1 - z0 > 10) {
-    const ly = range(rng, [10, h - 10]), lz = z0 + range(rng, [2, z1 - z0 - 8]);
-    out.push(box(w, `${id}:ledge`, 'ledge', sd, W - 1.2, W, ly, ly + 1, lz, lz + 6, true));
-  }
+  out.push(...building(lotOf(w, id, sd, depth, z0, z1), h, rng, d));
   w.coverEnd = Math.max(w.coverEnd, z1);
   // skybridge to a tower across the street that overlaps this one by enough length, both ends buried in the towers
   for (const o of w.towers[side === 'L' ? 'R' : 'L']) {
@@ -205,7 +209,7 @@ function placeLot(w, side) {
   w.nextZ[side] = Math.max(z1, Math.min(z0, end));
   if (z1 - z0 < (kind === 'tower' ? 0.5 : kind === 'crane' ? L.craneLot : 6)) return; // no room left before the corner
   if (kind === 'tower') tower(w, side, sd, id, z0, z1, d);
-  else if (kind === 'low') w.structures.push(box(w, `${id}:base`, 'tower', sd, W, W + range(rng, L.depth), 0, range(rng, L.lowH), z0, z1, true));
+  else if (kind === 'low') w.structures.push(...building(lotOf(w, id, sd, range(rng, L.depth), z0, z1), range(rng, L.lowH), rng, d));
   else if (kind === 'frame') frame(w, sd, id, z0, z1);
   else if (kind === 'crane') crane(w, sd, id, z0, z1);
 }

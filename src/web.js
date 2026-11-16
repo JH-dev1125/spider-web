@@ -7,6 +7,7 @@ const RAD = Math.PI / 180;
 // ~100 m ahead from beside the near one). The pitch is fixed per level. ahead: that distance (game.js pushes it past an
 // intersection, so a web never dives into the gap).
 export function aimVector(side, level, x = 0, ahead = CFG.aimAhead) {
+  if (side === 'C') { const up = CFG.aimUpDeg[level] * RAD; return { x: 0, y: Math.sin(up), z: Math.cos(up) }; } // W: along the street, steeply up
   const sign = side === 'L' ? -1 : 1;
   const yaw = Math.atan2(Math.max(1, CFG.corridorHalfWidth - sign * x), ahead);
   const pitch = CFG.aimPitchDeg[level] * RAD;

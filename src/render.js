@@ -9,6 +9,7 @@ import { hash01, lineAt, lineIndex } from './world.js';
 import { followCamera, shakeOffset, speedLineK, wrapZ, surfaceNormal } from './render-math.js';
 import { toLocal, yawOf } from './street.js';
 import { createHero } from './character.js';
+import { createBuildingDecor } from './render-buildings.js';
 
 const R = CFG.render;
 const C = CFG.colors;
@@ -165,6 +166,7 @@ export function createRenderer(canvas) {
   // ---- structures: id-keyed detail records, uploaded only when boxes enter or leave ----
   const box = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
   const facade = facadeMaterial(sunDir);
+  const decor = createBuildingDecor(THREE, scene, facade); // archetype kinds, window lights, glows (render-buildings.js)
   const instanced = (geo, mat, n) => {
     const m = new THREE.InstancedMesh(geo, mat, n);
     m.frustumCulled = false; // instances span the whole city; bounds would need recomputing every change
@@ -234,12 +236,13 @@ export function createRenderer(canvas) {
     const x = (a.x + b.x) / 2, z = -(a.z + b.z) / 2;
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
     const parts = { solid: [], trim: [], steel: [], yellow: [], tank: [], roof: [] };
+    if (decor.owns(kind)) return parts;
     const add = (batch, x, y, z, sx, sy, sz) => {
       const p = { x, y, z, sx, sy, sz }; parts[batch].push(p); return p;
     };
     const solid = () => Object.assign(add('solid', x, a.y, z, dx, dy, dz), {
       color: tints[Math.floor(h(1) * tints.length)], style: Math.floor(h(2) * 3) + h(3) * 0.99,
-    });
+    }, decor.facade(s));
     const beam = (batch, ax, ay, az, bx, by, bz, width) => {
       const p = add(batch, ax, ay, az, width, 1, width); p.end = new THREE.Vector3(bx, by, bz);
     };
@@ -280,7 +283,7 @@ export function createRenderer(canvas) {
       add('trim', x, a.y, z, dx, dy, dz);
       add('steel', x, b.y - 0.12, z, dx + 0.12, 0.12, dz + 0.12);
     } else {
-      solid();
+      const body = solid();
       // the face on the street: s.face ('+x' | '-x' | '+z' | '-z', the outward normal), else the one facing x = 0
       const fz = s.face?.[1] === 'z', sd = s.face ? (s.face[0] === '+' ? 1 : -1) : (x < 0 ? 1 : -1);
       const face = fz ? (sd > 0 ? b.z : a.z) : (sd > 0 ? b.x : a.x), [u0, u1] = fz ? [a.x, b.x] : [a.z, b.z];
@@ -291,7 +294,7 @@ export function createRenderer(canvas) {
         : beam(batch, face + sd * out, y0, -uA, face + sd * out, y1, -uB, r));
       // Thin cornices, masonry sills, and stacked balconies break up the wall silhouette.
       for (const yy of [a.y, b.y - 0.45]) add('trim', x, yy, z, dx + 0.5, 0.45, dz + 0.5);
-      const style = Math.floor(h(2) * 3);
+      const style = Math.floor(body.style);
       // Near LOD: glass lies at the solid face, recessed behind masonry reveals and metal frames.
       // Far LOD keeps the same window shader and silhouette bands.
       for (let yy = a.y + 3; yy < b.y - 1; yy += 6) put('trim', .08, yy, (u0 + u1) / 2, .18, .12, u1 - u0);
@@ -335,7 +338,7 @@ export function createRenderer(canvas) {
           }
         }
       }
-      const exposed = !listHasUpper(s);
+      const exposed = !listHasUpper(s) && !s.arch; // archetypes bring their own roof features
       if (exposed) {
         if (h(4) < R.tankChance) {
           add('steel', x, b.y, z, 3.8, 0.25, 3.8);
@@ -362,6 +365,7 @@ export function createRenderer(canvas) {
   const listHasUpper = s => s.kind === 'tower' && upperIds.has(s.id.split(':')[0]);
   function syncStructures(list, pos) {
     const detail = { x: Math.floor(pos.x / 20) * 20, y: Math.floor(pos.y / 12) * 12, z: Math.floor(pos.z / 20) * 20 };
+    decor.sync(list);
     const ids = new Set(list.map(s => s.id));
     let changed = false;
     for (const id of records.keys()) if (!ids.has(id)) { records.delete(id); changed = true; }
@@ -602,6 +606,7 @@ export function createRenderer(canvas) {
       lines.instanceMatrix.needsUpdate = true;
     }
 
+    decor.tick(view.t, cam.z);
     gl.render(scene, camera);
     if (statsEl) {
       fpsAvg += (1 / Math.max(dt, 1e-3) - fpsAvg) * 0.05;

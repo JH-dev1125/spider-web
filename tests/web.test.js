@@ -41,3 +41,13 @@ test('high webs: from the centre hi rises 40-60 m, mid 25-35, lo 10-15; mid and 
     if (level !== 'lo') assert.ok(side <= 20, `${level} ${side} deg sideways`);
   }
 });
+
+test('W (side C): straight ahead along the street and steeply up, from anywhere across it', () => {
+  for (const x of [-13, 0, 9]) for (const level of ['hi', 'mid', 'lo']) {
+    const v = aimVector('C', level, x);
+    assert.ok(Math.abs(Math.hypot(v.x, v.y, v.z) - 1) < 1e-12);
+    assert.equal(v.x, 0);
+    assert.ok(v.z > 0 && v.y > Math.sin(15 * Math.PI / 180), `${level} not steep`);
+  }
+  assert.ok(aimVector('C', 'hi').y > aimVector('C', 'mid').y && aimVector('C', 'mid').y > aimVector('C', 'lo').y);
+});

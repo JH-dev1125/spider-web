@@ -33,7 +33,7 @@ export function gestureFromBends([i, m, r, p], prev = 'none') {
   return 'none';
 }
 
-// side = the half of the MIRRORED preview the wrist is in (what the user sees: hand on the left = 'L'),
+// side = the third of the MIRRORED preview the palm is in (what the user sees: left 'L', middle 'C' = W, right 'R'),
 // level = the wrist's height in that same preview. handedness is accepted but only informational.
 // opts.world: world landmarks for the bend angles (metric 3D, no aspect distortion); opts.prev: see gestureFromBends.
 // Palm centre, not the wrist: the wrist sits well below the hand, so with wrist height the top third was
@@ -48,7 +48,7 @@ export function classifyHand(lms, handedness, { world, prev } = {}) {
   const bends = fingerBends(world ?? lms);
   const gesture = gestureFromBends(bends, prev);
   const [hi, mid] = CFG.handLevelCuts;
-  return { gesture, bends, side: c.x < 0.5 ? 'L' : 'R', level: c.y < hi ? 'hi' : c.y < mid ? 'mid' : 'lo' };
+  return { gesture, bends, side: c.x < CFG.handSideCuts[0] ? 'L' : c.x < CFG.handSideCuts[1] ? 'C' : 'R', level: c.y < hi ? 'hi' : c.y < mid ? 'mid' : 'lo' };
 }
 
 // While a web is held, only a clear break of the pose lets go: index or pinky folds well past the shoot limit,
@@ -66,7 +66,7 @@ const GESTURE_KO = { shoot: '발사', fist: '주먹', open: '손바닥', none: '
 const LEVEL_KO = { hi: '위', mid: '가운데', lo: '아래' };
 // Status line text for the HUD: st = createHandController status (or null).
 export const handStatusText = (st) => !st || !st.hands ? '손 없음'
-  : `${GESTURE_KO[st.gesture] ?? '없음'} · ${st.side === 'L' ? '왼' : '오'} · ${LEVEL_KO[st.level] ?? '가운데'}${st.zip ? ' · 당기기!' : ''}`;
+  : `${GESTURE_KO[st.gesture] ?? '없음'} · ${{ L: '왼', C: '정면 위', R: '오' }[st.side] ?? '오'} · ${LEVEL_KO[st.level] ?? '가운데'}${st.zip ? ' · 당기기!' : ''}`;
 
 // Returns the last gesture seen `frames` times in a row ('none' until then).
 export function createGestureGate(frames) {

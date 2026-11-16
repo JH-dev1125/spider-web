@@ -14,8 +14,10 @@
 //   distance   metres along the streets: the integral of the velocity along the current street direction.
 //   structures [{ id:string, kind, min:{x,y,z}, max:{x,y,z}, attach:boolean }] — axis-aligned boxes in world metres
 //              (x right, y up, z forward, street at y = 0). kind: 'tower' (solid block) | 'setback' (stepped upper
-//              block on a tower) | 'frame' (one post/beam of a hollow frame, attach false) | 'crane' (mast or jib) |
-//              'bridge' (skybridge between towers) | 'ledge' (small protrusion). id is stable for the box's lifetime;
+//              block on a tower) | 'crane' (mast or jib) | 'bridge' (skybridge between towers) | from archetypes.js:
+//              'slab' (terrace floor/ceiling) | 'column' (terrace column, attach false) | 'spire' | 'roof' | 'clock' |
+//              'sign' | 'balcony' | 'tank'; archetype boxes also carry arch, facing (street side), shape, light.
+//              (Retired: 'frame', 'ledge'.) id is stable for the box's lifetime;
 //              boxes of one composite share a prefix before ':' ('R12:base', 'R12:setback', 'L7:post0').
 //              Ids: 'K<col>_<row>_<q>:base' (a block-corner tower), '<X|Z><line>_<m><L|R><n>:part' (a lot on segment m
 //              of a street). face ('+x'|'-x'|'+z'|'-z', towers only): the outward normal of the face on the street.
@@ -232,7 +234,7 @@ export function createBot({ zip = false, turn = null } = {}) {
     if (held) { held = false; wait = 0; return [{ type: 'release' }]; } // missed: let go, retry
     if ((wait += dt) < CFG.botWaitSec) return [];
     let best = null, bestScore = -Infinity;
-    for (const side of ['L', 'R']) {
+    for (const side of ['L', 'R', 'C']) {
       for (const level of ['hi', 'mid', 'lo']) {
         const a = aim(g, side, level);
         if (!a.hit || facesBack(g, a.to) || isTurnAnchor(g.phys, a.to, a.id)) continue; // (a turn is the turning bot's job)

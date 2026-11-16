@@ -18,13 +18,14 @@ function leash(q, c, max, [kx, ky, kz]) {
   q[kx] = c.x + dx * k; q[ky] = c.y + dy * k; q[kz] = c.z + dz * k;
 }
 
+const THIN = new Set(['ledge', 'frame', 'column', 'spire', 'sign', 'balcony', 'clock', 'tank']);
 // Spring arm: if a structure box (+ camBoxMargin) cuts the line from the hero to the camera, the camera moves in
 // along that line to just before it, so no tower, crane or bridge hides him and it never sits inside one.
 function outOfBoxes(c, pos, structures) {
   const m = R.camBoxMargin, d = { x: c.x - pos.x, y: c.y - pos.y, z: c.z - pos.z };
   let t = 1;
   for (const s of structures) {
-    if (s.kind === 'ledge' || s.kind === 'frame') continue; // thin: hiding him for a frame beats jamming the camera into him
+    if (THIN.has(s.kind)) continue; // thin: hiding him for a frame beats jamming the camera into him
     let t0 = 0, t1 = 1;
     for (const k of ['x', 'y', 'z']) {
       const lo = s.min[k] - m - pos[k], hi = s.max[k] + m - pos[k];

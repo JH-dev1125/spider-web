@@ -128,11 +128,12 @@ function drawHud() {
     lines([
       ['WEB RUNNER', H.titlePx, H.color, true],
       ['왼쪽 Q · A · Z   /   오른쪽 E · D · C   (위 · 가운데 · 아래)', H.textPx, H.color],
+      ['W: 정면 위로 — 길 위의 크레인 · 구름다리에 줄', H.textPx, H.color],
       ['누르면 즉시 거미줄 → 누르고 있는 동안 스윙 → 떼면 날아감', H.textPx, H.color],
       ['줄이 붙은 채 Space: 줄 당기기 (앵커에 가까워지면 저절로 놓고 날아감)', H.textPx, H.color],
       coarse ? ['PC(키보드/웹캠)에서 열어주세요', H.hudPx, H.accent, true] : ['Space: 키보드로 시작', H.hudPx, H.accent, true],
       ['바닥에 닿으면 끝 · 너무 오래 잡고 있으면 뒤로 되돌아가요', H.textPx, H.color],
-      hand === 'on' && ['검지·새끼 펴면 발사, 유지하면 스윙, 풀면 날아감 (미리보기 속 손 위치 = 방향)', H.textPx, H.color],
+      hand === 'on' && ['검지·새끼 펴면 발사, 유지하면 스윙, 풀면 날아감 (미리보기 속 손 위치 = 방향, 가운데 칸 = W)', H.textPx, H.color],
       hand === 'on' && ['발사 자세로 손을 몸 쪽으로 확 당기면 줄 당기기', H.textPx, H.color],
       {
         off: ['H: 손동작 켜기', H.textPx, H.color],
@@ -164,11 +165,11 @@ function drawHandStatus() { // text just above the mirrored preview (bottom-righ
   const st = handStatus;
   const r = camEl.getBoundingClientRect();
   ctx.fillText(handStatusText(st), w - H.margin, r.top - H.margin);
-  // zone guides over the preview: left/right half and the hi/mid/lo cuts the game actually uses
+  // zone guides over the preview: left / middle (W) / right thirds and the hi/mid/lo cuts the game actually uses
   ctx.strokeStyle = 'rgba(255,255,255,0.55)';
   ctx.lineWidth = 1;
   ctx.beginPath();
-  ctx.moveTo(r.left + r.width / 2, r.top); ctx.lineTo(r.left + r.width / 2, r.bottom);
+  for (const k of CFG.handSideCuts) { ctx.moveTo(r.left + r.width * k, r.top); ctx.lineTo(r.left + r.width * k, r.bottom); }
   for (const k of CFG.handLevelCuts) { ctx.moveTo(r.left, r.top + r.height * k); ctx.lineTo(r.right, r.top + r.height * k); }
   ctx.stroke();
 }

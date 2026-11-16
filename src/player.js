@@ -308,10 +308,11 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 // Swept centres against expanded structure boxes prevent thin extremities crossing a face in one step.
 // Forces and impulses do the correction before integration; body positions/orientations are never projected.
-function sweepContacts(ph, h) {
+// near: the structures within reach this step (see stepPhysics), not the whole city.
+function sweepContacts(ph, h, near) {
   for (const b of Object.values(ph.rag.bodies)) {
     const radius = Math.max(b.part.startsWith('foot') ? .065 : .16, Math.min(...ANATOMY.find(a => a.name === b.part).size) * 1.1);
-    for (const { structure: s } of ph.boxes.values()) {
+    for (const s of near) {
       let entry = 0, exit = 1, axis = null;
       for (const k of ['x', 'y', 'z']) {
         const d = b.velocity[k] * h, lo = s.min[k] - radius, hi = s.max[k] + radius;
@@ -385,9 +386,15 @@ export function stepPhysics(ph, p, dt) {
     const steps = Math.max(1, Math.min(8, Math.ceil(maxTravel / .12))), sub = h / steps;
     const loads = Object.values(ph.rag.bodies).map(b => [b, b.force.clone(), b.torque.clone()]);
     const grip = ph.rope?.bodyA.position, P0 = grip && { x: grip.x, y: grip.y, z: grip.z };
+    const q = hero.position, reach = 2.5 + 8 * maxTravel; // the rig's size plus several steps of travel
+    const near = [];
+    for (const { structure: t } of ph.boxes.values()) {
+      if (q.x > t.min.x - reach && q.x < t.max.x + reach && q.y > t.min.y - reach && q.y < t.max.y + reach
+        && q.z > t.min.z - reach && q.z < t.max.z + reach) near.push(t);
+    }
     for (let i = 0; i < steps; i++) {
       if (i) for (const [b, force, torque] of loads) { b.force.copy(force); b.torque.copy(torque); }
-      sweepContacts(ph, sub);
+      sweepContacts(ph, sub, near);
       ph.world.step(sub);
     }
     if (ph.bound) boundStep(ph);

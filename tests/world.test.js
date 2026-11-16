@@ -9,7 +9,7 @@ import { makeStreet } from '../src/street.js';
 
 const L = CFG.level;
 const W = CFG.corridorHalfWidth;
-const KINDS = ['tower', 'setback', 'frame', 'crane', 'bridge', 'ledge'];
+const KINDS = ['tower', 'setback', 'frame', 'crane', 'bridge', 'ledge', 'slab', 'column', 'spire', 'roof', 'clock', 'sign', 'balcony', 'tank'];
 const ID = /^(K-?\d+_-?\d+_[0-3]|[XZ]-?\d+_-?\d+[LR]\d+):\w+$/;
 
 // Every box along `km` kilometres of street (axis, line) from its centre crossing: segments and their corner towers.
@@ -65,7 +65,7 @@ test('structures follow the renderer contract; ids are unique and share a prefix
       assert.equal(typeof s.attach, 'boolean');
       for (const k of ['x', 'y', 'z']) assert.ok(s.max[k] > s.min[k], `${s.id} empty on ${k}`);
       assert.ok(s.min.y >= 0, `${s.id} below the street`);
-      assert.equal(s.attach, s.kind !== 'frame', `${s.id}: only frame beams refuse webs`);
+      assert.equal(s.attach, s.kind !== 'frame' && s.kind !== 'column', `${s.id}: only frame beams and terrace columns refuse webs`);
       if (s.face) assert.match(s.face, /^[+-][xz]$/);
     }
   }
@@ -114,14 +114,15 @@ test('lazy: only the current street and the cross streets at the next intersecti
   assert.ok(neededSegments(seed, { x: 5, y: 40, z: r }, makeStreet('x', 1, 1, r)).length >= 3);
 });
 
-test('solid: nothing but ledges, jibs and bridges reaches into a street; no two solid buildings overlap', () => {
+test('solid: nothing but ledges, jibs, bridges and facade fixtures (balconies, signs, clocks) reaches into a street; no two solid buildings overlap', () => {
   for (const [axis, line] of [['z', 0], ['x', 1], ['z', 2]]) {
     const c = lineAt(2, centreKind(axis), line), lat = axis === 'z' ? 'x' : 'z';
     const list = course(2, 6, axis, line);
     for (const s of list) {
       const a = s.min[lat] - c, b = s.max[lat] - c, inner = Math.min(Math.abs(a), Math.abs(b)), crosses = a < 0 && b > 0;
       if (crosses || inner < W - 1e-9) {
-        assert.ok(s.kind === 'bridge' || s.kind === 'ledge' || s.id.endsWith(':jib'), `${s.id} ${s.kind} intrudes`);
+        assert.ok(['bridge', 'ledge', 'balcony', 'sign', 'clock'].includes(s.kind) || s.id.endsWith(':jib'), `${s.id} ${s.kind} intrudes`);
+        if (['balcony', 'sign', 'clock'].includes(s.kind)) assert.ok(inner >= W - 1.5 && !crosses, `${s.id} sticks out ${W - inner} m`);
       }
     }
   }
@@ -174,12 +175,13 @@ test('no impossible section: along streets on 5 seeds, sure-anchor holes never e
   }
 });
 
-test('variety: the late course has one-sided stretches, low towers, frames, cranes, bridges, gaps', () => {
+test('variety: the late course has one-sided stretches, low towers, terraces, cranes, bridges, gaps; no hollow frames', () => {
   const late = course(4, 20).filter((s) => s.min.z > L.easyZ + L.rampZ);
   const has = (f) => late.some(f);
   assert.ok(has((s) => s.kind === 'tower' && s.max.y < L.goodH), 'low towers');
   assert.ok(has((s) => s.kind === 'tower' && s.max.y > 120), 'high towers');
-  for (const k of ['frame', 'crane', 'bridge', 'setback', 'ledge']) assert.ok(has((s) => s.kind === k), k);
+  for (const k of ['crane', 'bridge', 'setback', 'slab', 'column', 'spire', 'roof', 'clock', 'sign', 'balcony', 'tank']) assert.ok(has((s) => s.kind === k), k);
+  assert.ok(!has((s) => s.kind === 'frame'), 'hollow frames are retired');
   // a face with no lot over most of a block (a gap or a one-sided stretch)
   const towers = (sd) => late.filter((s) => s.kind === 'tower' && !s.id.startsWith('K') && Math.sign(s.min.x + s.max.x) === sd);
   const longestEmpty = (list) => {
@@ -191,10 +193,10 @@ test('variety: the late course has one-sided stretches, low towers, frames, cran
   assert.ok(Math.max(longestEmpty(towers(-1)), longestEmpty(towers(1))) > 60);
 });
 
-test('easier early: the first 400 m is dense towers on both sides, no frames, cranes, bridges or gaps', () => {
+test('easier early: the first 400 m is dense towers on both sides, no frames, terraces, cranes, bridges or gaps', () => {
   for (const seed of [7, 8]) {
     const early = course(seed, 1).filter((s) => s.max.z < L.easyZ);
-    assert.ok(early.every((s) => ['tower', 'setback', 'ledge'].includes(s.kind)));
+    assert.ok(early.every((s) => !['frame', 'crane', 'bridge', 'slab', 'column'].includes(s.kind)), 'only plain buildings');
     for (const sd of [-1, 1]) {
       const t = early.filter((s) => s.kind === 'tower' && Math.sign(s.min.x) === sd).sort((a, b) => a.min.z - b.min.z);
       for (let i = 1; i < t.length; i++) {
@@ -215,4 +217,22 @@ test('clampToStreets: blocks are out of bounds, streets and intersections are no
   const q = { x: W + m + 2, y: 30, z: 50 }, v = { x: 5, y: 1, z: 9 };
   assert.equal(clampToStreets(seed, q, v), true);
   assert.deepEqual([q.x, v.x, v.z], [W + m, 0, 9]); // back onto the street's edge, no more velocity into the block
+});
+
+// W (side 'C') fires straight ahead at aimUpDeg: cranes must hang their jib across the street, low enough for
+// that web from flight height, and often enough late in the course that W matters.
+test('cranes: jibs span most of the street within W reach, at least every ~400 m late', () => {
+  for (const seed of [1, 2, 3]) {
+    const late = course(seed, 12).filter((s) => s.min.z > L.easyZ + L.rampZ);
+    const jibs = late.filter((s) => s.id.endsWith(':jib'));
+    const zs = late.map((s) => s.min.z);
+    const span = Math.max(...zs) - Math.min(...zs);
+    // (on the grid about half of every block is corner towers, so lots - and cranes - are rarer per metre)
+    assert.ok(jibs.length >= span / 400, `seed ${seed}: ${jibs.length} jibs in ${span.toFixed(0)} m`);
+    for (const j of jibs) {
+      assert.ok(j.min.x < -5 && j.max.x > 5, `${j.id} does not reach across the centreline`);
+      const rise = j.min.y - 30, run = rise / Math.tan(CFG.aimUpDeg.mid * Math.PI / 180);
+      assert.ok(Math.hypot(rise, run) < CFG.webRange, `${j.id} out of W reach from 30 m`);
+    }
+  }
 });

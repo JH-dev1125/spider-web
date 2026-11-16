@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>Web Runner — building archetypes</title>
+<!-- Staged scenes for checking the archetypes and lights: ?shot=skyline|terrace|neon|crane (&stats). -->
+<script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }</script>
+<style>html,body{margin:0;height:100%;overflow:hidden;background:#000}canvas{display:block;width:100vw;height:100vh}</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<script type="module">
+import { createRenderer } from '../src/render.js';
+import { makeRng } from '../src/world.js';
+import { buildBuilding, streetLot } from '../src/archetypes.js';
+import { CFG } from '../src/config.js';
+
+const W = CFG.corridorHalfWidth;
+const shot = new URLSearchParams(location.search).get('shot') || 'skyline';
+// the first rng seed whose building is `arch` (archetypes are picked by hash)
+function force(arch, id, sd, z0, len, h, depth = 26, p = 1) {
+  for (let seed = 1; seed < 5000; seed++) {
+    const list = buildBuilding(streetLot(id, sd, W, depth, z0, z0 + len), h, makeRng(seed), { p });
+    if (list[0].arch === arch && (arch !== 'terrace' || list.some((s) => s.kind === 'slab'))) return list;
+  }
+  return [];
+}
+const row = (sd, z, specs) => specs.flatMap(([arch, len, h], i) => {
+  const out = force(arch, `${sd > 0 ? 'R' : 'L'}${i}${Math.round(z)}`, sd, z, len, h); z += len + 1; return out;
+});
+
+let structures = [], pos = { x: 0, y: 40, z: 0 }, vel = { x: 0, y: 0, z: 18 }, anchor = null, pose = 'glide';
+if (shot === 'skyline') {
+  structures = [...row(-1, 30, [['deco', 40, 120], ['clock', 30, 80], ['gothic', 36, 110], ['empire', 44, 130], ['pyramid', 34, 100], ['glass', 40, 90]]),
+    ...row(1, 20, [['empire', 40, 105], ['pyramid', 30, 115], ['deco', 44, 135], ['clock', 30, 70], ['billboard', 40, 80], ['gothic', 36, 125]])];
+  pos = { x: 0, y: 92, z: -150 }; vel = { x: 0, y: 2, z: 16 };
+} else if (shot === 'terrace') {
+  structures = [...row(1, -10, [['terrace', 60, 110], ['terrace', 50, 95], ['terrace', 60, 120]]), ...row(-1, -10, [['terrace', 70, 100], ['glass', 60, 90], ['terrace', 60, 110]])];
+  const slab = structures.find((s) => s.id.endsWith('t0floor') && s.min.x > 0);
+  pos = { x: 7, y: slab.max.y + 3, z: slab.min.z - 12 }; vel = { x: 1, y: 0, z: 14 };
+} else if (shot === 'neon') {
+  structures = [...row(-1, 0, [['brownstone', 26, 24], ['warehouse', 40, 16], ['brownstone', 24, 27], ['walkup', 26, 22], ['brownstone', 24, 25], ['billboard', 40, 60]]),
+    ...row(1, 0, [['walkup', 26, 20], ['brownstone', 24, 28], ['billboard', 40, 55], ['brownstone', 26, 23], ['warehouse', 40, 18], ['glass', 40, 80]])];
+  pos = { x: 3, y: 14, z: 40 }; vel = { x: 0, y: 0, z: 12 };
+} else if (shot === 'crane') {
+  const zc = 50, H = 62;
+  structures = [...row(1, -20, [['glass', 50, 80], ['brownstone', 30, 22], ['empire', 50, 110]]), ...row(-1, -20, [['deco', 60, 100], ['terrace', 60, 90]]),
+    { id: 'R99:mast', kind: 'crane', attach: true, min: { x: W + 3, y: 0, z: zc - 1.5 }, max: { x: W + 6, y: H, z: zc + 1.5 } },
+    { id: 'R99:jib', kind: 'crane', attach: true, min: { x: W - 25, y: H, z: zc - 1.5 }, max: { x: W + 14, y: H + 3, z: zc + 1.5 } }];
+  // the hero just webbed the jib with W: the anchor is where a straight-ahead aimUpDeg.mid web meets its underside
+  const up = CFG.aimUpDeg.mid * Math.PI / 180, y0 = 40, run = (H - y0 - CFG.render.playerHand) / Math.tan(up);
+  pos = { x: -2, y: y0, z: zc - 1 - run }; vel = { x: 0, y: -2, z: 17 };
+  anchor = { x: pos.x, y: H, z: zc - 1 }; pose = 'swing';
+}
+const renderer = createRenderer(document.getElementById('gl'));
+renderer.resize(innerWidth, innerHeight, devicePixelRatio || 1);
+const player = { pos, vel, anchor, ropeLen: anchor ? Math.hypot(anchor.y - pos.y, anchor.z - pos.z) : 0, alive: true, wall: 0 };
+let t = 20;
+const frame = () => {
+  t += 1 / 60;
+  renderer.render({ player, structures, web: null, missLine: null, pose, t, shake: 0 }, 1 / 60);
+  requestAnimationFrame(frame);
+};
+for (let i = 0; i < 30; i++) { t += 1 / 60; renderer.render({ player, structures, web: null, missLine: null, pose, t, shake: 0 }, 1 / 60); }
+frame();
+</script>
+</body>
+</html>
