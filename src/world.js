@@ -142,8 +142,35 @@ const lotOf = (w, id, sd, depth, v0, v1) => {
   return { id: s.id, x0: s.min.x, x1: s.max.x, z0: s.min.z, z1: s.max.z, streetSide: s.face };
 };
 
-// A lot clipped short at a corner can leave an archetype part with no room (size <= 0): drop those parts.
-const building = (fp, h, rng, d) => buildBuilding(fp, h, rng, d).filter((b) => ['x', 'y', 'z'].every((k) => b.max[k] - b.min[k] > 0.05));
+// A lot clipped short at a corner can leave an archetype part with no room (size <= 0): drop those parts. Two parts
+// that coincide (a narrow lot puts two pinnacles or columns on one spot) keep one; a part whose face lies in the same
+// plane as another's, facing the same way and overlapping it, is pulled 3 cm in on that face (no z-fighting).
+const AXES = ['x', 'y', 'z'];
+function building(fp, h, rng, d) {
+  const out = [];
+  for (const b of buildBuilding(fp, h, rng, d)) {
+    if (!AXES.every((k) => b.max[k] - b.min[k] > 0.05)) continue;
+    if (out.some((o) => AXES.every((k) => Math.abs(o.min[k] - b.min[k]) < 1e-6 && Math.abs(o.max[k] - b.max[k]) < 1e-6))) continue;
+    out.push(b);
+  }
+  return separateCoplanar(out);
+}
+export function separateCoplanar(list) {
+  const vol = (b) => AXES.reduce((v, k) => v * (b.max[k] - b.min[k]), 1);
+  for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) {
+    for (const k of AXES) for (const side of ['min', 'max']) {
+      const a = list[i], b = list[j];
+      if (Math.abs(a[side][k] - b[side][k]) > 1e-6 || (k === 'y' && side === 'min' && a.min.y === 0)) continue;
+      const [u, v] = AXES.filter((q) => q !== k);
+      if (Math.min(a.max[u], b.max[u]) - Math.max(a.min[u], b.min[u]) <= 1e-6 || Math.min(a.max[v], b.max[v]) - Math.max(a.min[v], b.min[v]) <= 1e-6) continue;
+      if (a.kind === 'tower' && b.kind === 'tower') continue; // face blocks keep their exact faces (sure anchors)
+      const t = a.kind === 'tower' ? b : b.kind === 'tower' ? a : vol(a) < vol(b) ? a : b; // never the face block
+      const m = t === a ? b : a;
+      if (side === 'min') t.min[k] = m.min[k] + 0.03; else t.max[k] = m.max[k] - 0.03;
+    }
+  }
+  return list;
+}
 
 const lotLen = (rng, kind) => (kind === 'tower' || kind === 'low' ? range(rng, L.towerLen)
   : kind === 'frame' ? range(rng, L.frameLen) : kind === 'crane' ? L.craneLot : range(rng, L.gapLen));
@@ -233,6 +260,7 @@ export function buildSegment(seed, axis, line, m) {
     if (!l && !r) break;
     placeLot(w, l && (!r || w.nextZ.L <= w.nextZ.R) ? 'L' : 'R');
   }
+  separateCoplanar([...segmentCorners(seed, axis, line, m), ...w.structures]); // (also between lots and corners)
   return w.structures;
 }
 

@@ -185,7 +185,9 @@ export const CFG = deepFreeze({
     camSnap: 80, // m: a bigger jump (restart) snaps the camera instead of easing
     fovMin: 60, // a normal lens: anchors ~52 m ahead are already in view looking forward
     fovMax: 68, // only a slight widening with speed; more reads as fisheye distortion
-    near: 0.1,
+    trimProud: 0.04, // m: cornices, slabs and plates stand this far off the faces they wrap (never coplanar: no z-fighting)
+    decalLift: 0.035, // m: planes on a face (web splat, clock dial, signs and ads) sit this far off it
+    near: 0.3, // (was 0.1: depth precision; the camera never comes closer than ~1 m to a surface)
     far: 3400, // the 2x skyline (spires to ~700 m) stays inside the frustum
     fogDensity: 0.0034, // exp2: ~65% hazed at the 300 m spawn horizon, opaque by ~500 m; tall tops show through the haze
     // city

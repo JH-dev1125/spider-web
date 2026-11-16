@@ -65,12 +65,14 @@ function facadeMaterial(sunDir) {
       attribute vec4 aInfo; // rgb tint, style + seed (integer part = style)
       varying vec3 vW; varying vec3 vN; varying vec4 vInfo;
       #include <common>
+      #include <logdepthbuf_pars_vertex>
       #include <fog_pars_vertex>
       void main() {
         vec4 wp = modelMatrix * instanceMatrix * vec4(position, 1.0);
         vW = wp.xyz; vN = normal; vInfo = aInfo;
         vec4 mvPosition = viewMatrix * wp;
         gl_Position = projectionMatrix * mvPosition;
+        #include <logdepthbuf_vertex>
         #include <fog_vertex>
       }`,
     fragmentShader: `
@@ -78,8 +80,10 @@ function facadeMaterial(sunDir) {
       uniform vec3 sunDir; uniform vec3 litColor; uniform vec3 roof; uniform vec2 cell;
       varying vec3 vW; varying vec3 vN; varying vec4 vInfo;
       #include <common>
+      #include <logdepthbuf_pars_fragment>
       #include <fog_pars_fragment>
       void main() {
+        #include <logdepthbuf_fragment>
         vec3 n = normalize(vN);
         vec3 tint = vInfo.rgb;
         float light = 0.5 + 0.35 * max(dot(n, sunDir), 0.0) + 0.15 * n.y;
@@ -113,9 +117,15 @@ function skyMaterial(sunDir, fogColor) {
       horizon: { value: new THREE.Color(C.skyHorizon) }, fogc: { value: fogColor }, sunDir: { value: sunDir },
     },
     vertexShader: `varying vec3 vDir;
-      void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        #include <logdepthbuf_vertex> }`,
     fragmentShader: `uniform vec3 top; uniform vec3 mid; uniform vec3 horizon; uniform vec3 fogc; uniform vec3 sunDir; varying vec3 vDir;
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
       void main() {
+        #include <logdepthbuf_fragment>
         vec3 d = normalize(vDir);
         float h = d.y;
         vec3 col = mix(mix(fogc, horizon, smoothstep(-0.02, 0.1, h)), mid, smoothstep(0.08, 0.3, h));
@@ -141,7 +151,8 @@ function splatTexture() {
 }
 
 export function createRenderer(canvas) {
-  const gl = new THREE.WebGLRenderer({ canvas, antialias: (window.devicePixelRatio || 1) < 2, powerPreference: 'high-performance' });
+  // logarithmic depth: from the 0.3 m near plane to 3.4 km, coplanar-close faces (roof props, sills, signs) keep their order
+  const gl = new THREE.WebGLRenderer({ canvas, antialias: (window.devicePixelRatio || 1) < 2, powerPreference: 'high-performance', logarithmicDepthBuffer: true });
   const scene = new THREE.Scene();
   const fogColor = new THREE.Color(C.skyHorizon).lerp(new THREE.Color(C.skyMid), 0.45);
   scene.fog = new THREE.FogExp2(fogColor, R.fogDensity);
@@ -266,7 +277,7 @@ export function createRenderer(canvas) {
           const top = Math.min(y + 4, b.y);
           for (const zz of [-a.z - 0.14, -b.z + 0.14]) beam('yellow', a.x + 0.14, y, zz, b.x - 0.14, top, zz, 0.13);
           for (const xx of [a.x + 0.14, b.x - 0.14]) beam('yellow', xx, y, -a.z - 0.14, xx, top, -b.z + 0.14, 0.13);
-          add('yellow', x, y, z, dx, 0.14, dz);
+          add('yellow', x, y, z, dx - 2 * R.trimProud, 0.14, dz - 2 * R.trimProud); // inside the corner posts' faces
         }
       } else {
         for (const yy of [a.y, b.y - 0.18]) for (const zz of [-a.z - 0.1, -b.z + 0.1]) add('yellow', x, yy, zz, dx, 0.18, 0.18);
@@ -277,11 +288,11 @@ export function createRenderer(canvas) {
       }
     } else if (kind === 'bridge') {
       const p = solid(); p.style = 2.03; p.color = tints[2];
-      for (const yy of [a.y, b.y - 0.25]) add('steel', x, yy, z, dx, 0.25, dz + 0.15);
+      for (const yy of [a.y - R.trimProud, b.y - 0.25 + R.trimProud]) add('steel', x, yy, z, dx + 2 * R.trimProud, 0.25, dz + 0.15);
       for (let xx = a.x + 1; xx < b.x; xx += 2.5) for (const zz of [-a.z, -b.z]) add('trim', xx, a.y, zz, 0.12, dy, 0.16);
     } else if (kind === 'ledge') {
       add('trim', x, a.y, z, dx, dy, dz);
-      add('steel', x, b.y - 0.12, z, dx + 0.12, 0.12, dz + 0.12);
+      add('steel', x, b.y - 0.12 + R.trimProud, z, dx + 0.12, 0.12, dz + 0.12);
     } else {
       const body = solid();
       // the face on the street: s.face ('+x' | '-x' | '+z' | '-z', the outward normal), else the one facing x = 0
@@ -293,7 +304,8 @@ export function createRenderer(canvas) {
       const beamOut = (batch, out, y0, uA, y1, uB, r) => (fz ? beam(batch, uA, y0, -(face + sd * out), uB, y1, -(face + sd * out), r)
         : beam(batch, face + sd * out, y0, -uA, face + sd * out, y1, -uB, r));
       // Thin cornices, masonry sills, and stacked balconies break up the wall silhouette.
-      for (const yy of [a.y, b.y - 0.45]) add('trim', x, yy, z, dx + 0.5, 0.45, dz + 0.5);
+      // (the top cornice stands trimProud above the roof: flush, the two tops z-fight)
+      for (const yy of [a.y, b.y - 0.45 + R.trimProud]) add('trim', x, yy, z, dx + 0.5, 0.45, dz + 0.5);
       const style = Math.floor(body.style);
       // Near LOD: glass lies at the solid face, recessed behind masonry reveals and metal frames.
       // Far LOD keeps the same window shader and silhouette bands.
@@ -596,7 +608,7 @@ export function createRenderer(canvas) {
       let from = vHand, n = 0;
       for (let k = bends.length - 1; k >= 0; k--, n++) { const v = set3(vBends[n], bends[k]); segment(ropes[n], from, v); from = v; }
       segment(ropes[n], from, anchor);
-      splat.position.copy(anchor).addScaledVector(normal, 0.035);
+      splat.position.copy(anchor).addScaledVector(normal, R.decalLift);
     }
     flashAge += dt;
     flash.visible = flashAge < 0.22;

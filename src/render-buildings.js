@@ -121,19 +121,23 @@ function haloMaterial(THREE) {
     vertexShader: `
       varying vec2 vUv; varying vec3 vCol;
       #include <common>
+      #include <logdepthbuf_pars_vertex>
       #include <fog_pars_vertex>
       void main() {
         vec4 mvPosition = modelViewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
         mvPosition.xy += position.xy * length(instanceMatrix[0].xyz);
         vUv = uv; vCol = instanceColor;
         gl_Position = projectionMatrix * mvPosition;
+        #include <logdepthbuf_vertex>
         #include <fog_vertex>
       }`,
     fragmentShader: `
       uniform float gain; varying vec2 vUv; varying vec3 vCol;
       #include <common>
+      #include <logdepthbuf_pars_fragment>
       #include <fog_pars_fragment>
       void main() {
+        #include <logdepthbuf_fragment>
         float d = length(vUv - 0.5) * 2.0;
         float a = pow(max(0.0, 1.0 - d), 2.4) + 0.6 * pow(max(0.0, 1.0 - d * 3.0), 2.0);
         #ifdef USE_FOG
@@ -286,13 +290,13 @@ export function createBuildingDecor(THREE, scene, facade) {
       if (s.light) glow('blink', cx, b.y + 0.3, cz, 3.2, '#ff2a1a');
     } else if (s.kind === 'clock') {
       put('stone', cx, a.y, cz, dx, dy, dz, 0, C('#cbbd9e'));
-      const [x, , z] = onFace(0.03, 0, 0);
+      const [x, , z] = onFace(R.decalLift, 0, 0);
       put('dial', x, (a.y + b.y) / 2, z, width * 0.92, dy * 0.92, 1, rot);
       const [hx, , hz] = onFace(0.6, 0, 0);
       glow('halo', hx, (a.y + b.y) / 2, hz, width * 1.9, '#ffcf80');
     } else if (s.kind === 'sign') {
       const i = Math.floor(h(4) * 4);
-      const [x, , z] = onFace(0.03, 0, 0), y = (a.y + b.y) / 2;
+      const [x, , z] = onFace(R.decalLift, 0, 0), y = (a.y + b.y) / 2;
       put('metal', cx, a.y, cz, dx, dy, dz);
       if (s.shape === 'billboard') {
         put('ads', x, y, z, width, dy, 1, rot, undefined, RECT.ad(i));
