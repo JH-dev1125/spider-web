@@ -35,6 +35,22 @@ export const CFG = deepFreeze({
   zipAccel: 45, // m/s^2 toward the anchor (~4.6 g)
   zipMaxSpeed: 55, // m/s: no more pull once closing this fast (stays under the 57 m/s no-tunnel test)
   zipReleaseDist: 7, // m: this close to the anchor (or half this short of its z) = arrived, let go before passing it
+  zipLaunch: 20, // m/s additive launch delta-v; replaces held zip when the motion hooks are integrated
+  zipRopeBias: 0.5, // normalized heading + bias * normalized rope; <= .5 bounds horizontal deflection to 30 degrees
+  zipLaunchSteps: 3,
+  zipCooldownSec: 0.6,
+  moves: {
+    blendSec: 0.16,
+    landingLeadSec: 0.8,
+    landingStiffSec: 0.18,
+    landingSettleSec: 1,
+    strainForce: 2400, // N: full strain, using the solved rope equation multiplier
+    weights: {
+      corkscrew: 1, frontHalfTwist: 1, layoutBackflip: 1, swanDive: 1.2,
+      superheroDive: 1.2, splitKick: 1, tuckBurst: 1, thwip: 1.2,
+      spreadEagle: 0.8, slingshotWhip: 1,
+    },
+  },
   // wall run: hitting a building's side face with speed toward it runs along it, then jumps off
   wallRunMinSpeed: 2.5, // m/s into the face (before the hit) that starts a run; slower is a plain bump
   wallRunSec: 0.8, // long enough to see the stride (was 0.4)
