@@ -27,7 +27,7 @@ export const CFG = deepFreeze({
   crossIntersections: 2, // cross streets are built at this many intersections ahead
   turnShare: 0.6, // inside an intersection, horizontal velocity more than this along the cross street = turned
   turnInset: 3, // m: ..counted only this far inside the intersection square (at its edge he'd turn into the corner tower)
-  turnReach: 20, // bot: a turning web lands at most this far short of the corner's edge
+  turnReach: 14, // bot: a turning web lands at most this far short of the corner's edge
   behindDistance: 40, // and are removed this far behind
   startHeight: 50,
   startSpeed: 12, // m/s forward at the start: a gentle leap, not a launch
