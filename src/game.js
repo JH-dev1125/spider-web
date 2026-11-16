@@ -6,8 +6,10 @@
 //              physics body each frame (plus swingPhase, ropeMin: game-internal, ignore).
 //   structures [{ id:string, kind, min:{x,y,z}, max:{x,y,z}, attach:boolean }] — axis-aligned boxes in world metres
 //              (x right, y up, z forward, street at y = 0). kind: 'tower' (solid block) | 'setback' (stepped upper
-//              block on a tower) | 'frame' (one post/beam of a hollow frame, attach false) | 'crane' (mast or jib) |
-//              'bridge' (skybridge between towers) | 'ledge' (small protrusion). id is stable for the box's lifetime;
+//              block on a tower) | 'crane' (mast or jib) | 'bridge' (skybridge between towers) | from archetypes.js:
+//              'slab' (terrace floor/ceiling) | 'column' (terrace column, attach false) | 'spire' | 'roof' | 'clock' |
+//              'sign' | 'balcony' | 'tank'; archetype boxes also carry arch, facing (street side), shape, light.
+//              (Retired: 'frame', 'ledge'.) id is stable for the box's lifetime;
 //              boxes of one composite share a prefix before ':' ('R12:base', 'R12:setback', 'L7:post0').
 //              Boxes are added ahead (CFG.viewDistance) and removed behind (CFG.behindDistance).
 //   web        { from, to, dist, travelled, hit } | null — a web in flight (from = the hand, to = target point).

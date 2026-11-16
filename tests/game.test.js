@@ -447,13 +447,13 @@ test('W: a web straight ahead and up lands on a crane jib over the street and sw
   const g = createGame(1);
   const jibY = 70;
   course(g, [
-    block('K:mast', 'crane', { x: W + 3, y: 0, z: 32 }, { x: W + 6, y: jibY, z: 35 }),
-    block('K:jib', 'crane', { x: -10, y: jibY, z: 32 }, { x: W + 14, y: jibY + 3, z: 35 }), // a 30 deg web from 51 m meets y = 70 at z = 33
+    block('K:mast', 'crane', { x: W + 3, y: 0, z: 51 }, { x: W + 6, y: jibY, z: 54 }),
+    block('K:jib', 'crane', { x: -10, y: jibY, z: 51 }, { x: W + 14, y: jibY + 3, z: 54 }), // a 20 deg web from 51 m meets y = 70 at z = 52.5
   ]);
   stepGame(g, DT, []); // syncs the physics boxes
   const a = aim(g, 'C', 'mid');
   assert.ok(a.hit, 'W aims at the jib');
-  assert.ok(Math.abs(a.to.y - jibY) < 1e-6 && a.to.z > 32 - 1e-6 && a.to.z < 35 + 1e-6, `hit ${JSON.stringify(a.to)}`);
+  assert.ok(Math.abs(a.to.y - jibY) < 1e-6 && a.to.z > 51 - 1e-6 && a.to.z < 54 + 1e-6, `hit ${JSON.stringify(a.to)}`);
   stepGame(g, DT, [shot('C', 'mid')]);
   fly(g);
   assert.ok(g.player.anchor && Math.abs(g.player.anchor.y - jibY) < 1e-6, 'attached to the jib');
