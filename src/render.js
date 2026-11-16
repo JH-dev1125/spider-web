@@ -10,6 +10,7 @@ import { followCamera, shakeOffset, speedLineK, wrapZ, surfaceNormal } from './r
 import { toLocal, yawOf } from './street.js';
 import { createHero } from './character.js';
 import { createBuildingDecor } from './render-buildings.js';
+import { createPostFX } from './postfx.js';
 
 const R = CFG.render;
 const C = CFG.colors;
@@ -159,6 +160,7 @@ export function createRenderer(canvas) {
   scene.fog = new THREE.FogExp2(fogColor, R.fogDensity);
   const camera = new THREE.PerspectiveCamera(R.fovMin, 16 / 9, R.near, R.far);
   scene.add(camera); // speed lines ride on it
+  const postfx = createPostFX(THREE, gl, scene, camera);
 
   const sunDir = new THREE.Vector3(R.sunDir[0], R.sunDir[1], -R.sunDir[2]).normalize();
   scene.add(new THREE.HemisphereLight(0x8a90d8, 0x2a1a30, 1.6));
@@ -645,7 +647,7 @@ export function createRenderer(canvas) {
     }
 
     decor.tick(view.t, cam.z);
-    gl.render(scene, camera);
+    postfx.render(view, dt);
     if (statsEl) {
       fpsAvg += (1 / Math.max(dt, 1e-3) - fpsAvg) * 0.05;
       statsEl.textContent = `calls ${gl.info.render.calls}  tris ${gl.info.render.triangles}  fps ${fpsAvg.toFixed(0)}`;
