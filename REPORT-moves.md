@@ -74,3 +74,78 @@ reachability or screenshots. These boundaries and the exact migration sites are
 documented in `docs/motion-hooks.md`.
 
 The pre-existing untracked `package-lock.json` was left untouched and excluded.
+
+## Flight chain
+
+Added `FLIGHT`, `pickFlight(rng,last,airtimeLeft,speed,vy)` and
+`createFlightChain(rng).step(dt,ctx)`. Existing exports, call signatures and
+the original nineteen `MOVES` entries remain compatible and unchanged.
+The chain reuses all ten original tricks by reference and adds sixteen moves:
+
+- `frontRolls`: repeated tucked forward somersaults, three angular kicks.
+- `pencilDive`: straight joined legs, low open hands, forward lean.
+- `arabesque`: back leg extended, pointed feet, high/side ballet arms.
+- `attitudeTurn`: turned-out raised knee and a slow vertical spin.
+- `skySurfer`: sideways crouch shifting its balance between the legs.
+- `cannonball`: knees hugged tightly through a gentle diagonal tumble.
+- `cityLounge`: supine lean, hands behind the head, crossed legs, city glance.
+- `scissorKicks`: repeated alternating leg flutters with arms swept back.
+- `twistingDive`: compact chest arms and a barrel/twist impulse.
+- `airRun`: three alternating running strides with opposing arms.
+- `starPike`: open star, straight-leg pike, reopen and fold again.
+- `sideSaddle`: joined legs to one side, one hand low and one overhead.
+- `thinker`: tucked knees, fist toward chin, a playful slow turn.
+- `superman`: one forward fist, joined trailing legs, then pencil shape.
+- `corkscrewLayout`: compact twist opening into an extended layout.
+- `peekaboo`: backward rotation with hands near the face, then a righting kick.
+
+Selection excludes the final three choices, preserves history across web
+cancellations and applies 5x context weighting to dive/twist or apex poses.
+The safe-airtime gate accounts for .8x playback plus .3 s landing reserve.
+Each pick randomizes mirror and playback rate by 10–20%; actual link durations
+stay .6–1.8 s. Links follow without a wait, blending directly over .25 s.
+Optional additive sampler arguments mirror the skeleton and blend valid
+world-target snapshots in joint space. Swing-vector/twist interpolation fixes
+a reproduced shoulder-cone violation from ordinary quaternion crossfades.
+Mirrored angular events use axial-vector reflection, preserving forward flips.
+
+The exact driver sampling hook is:
+
+```js
+sampleMove(f.move, f.t, frame, t,
+  { mirror: f.mirror, from: ph.flightFrom, alpha: f.blend });
+```
+
+`docs/motion-hooks.md` contains the complete single driver hook, setup and
+press latch, event intervals, replacement of the single-trick release path,
+spin spring/damping guard, target snapshots and immediate no-fit preland.
+No player/game/renderer integration files were changed while the coordinator
+is wiring the main branch.
+
+Executed `node --test tests/*.test.js`: **151 passed, 0 failed**.
+Seed 431 at 120 Hz for five simulated minutes produced **265 links, all 26
+distinct moves, zero idle ticks**, with no repeat within the previous three.
+Tests cover dense finite/anatomical samples, mirrored samples and crossfades,
+context weights, safe airtime, duration/rate bounds, press/rope/landing
+cancellation, impulse reflection and preserved legacy behavior.
+
+Expanded zero-g fixture proof covers all 35 unique moves (nineteen original
+plus sixteen new), both mirrors and .8/1.2 playback, complete move durations,
+.25 s entry blends, and runs both without and with angular impulses. It uses
+the same inertia-scaled internal muscles, 120 Hz and 28 solver iterations.
+No NaNs or velocity explosion; total linear momentum stays within 1e-5.
+The original pose-only joint-gap bound remains .12 m. With external angular
+events the bound is .13 m: the unchanged legacy corkscrew reaches about .121 m
+with its 95 N m s event. Increasing solver iterations did not remove that
+transient, so legacy impulses were preserved and this added loaded check is
+reported separately. Deliberate linear launch events are excluded from the
+momentum check. The repeated-roll move additionally demonstrates 2..3.25
+integrated pelvis turns at the tested rate extremes.
+
+Concerns: the exact hook must replace the old single-trick/glide expiry path,
+consume the press latch before physics (including missed shots), enter preland
+when no safe link fits, and disable root spring **and damping** during spins.
+These are documented integration requirements, not verified main-driver
+behavior. Behind-camera readability, physical clearance, live-gravity rotation
+counts/settling and integration screenshots still need the coordinator's
+playtest. No push or merge. The existing untracked lockfile remains excluded.

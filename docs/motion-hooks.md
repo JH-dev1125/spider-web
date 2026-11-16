@@ -14,7 +14,7 @@ import { zipLaunch } from './zip.js';
 
 `MOVES[name]` has `name`, `trick`, `duration` (seconds), `minAirtime`, `weight`,
 `cancelOnPress`, `keyframes: [{time, targets}]`, and `impulses`. Only the ten
-`trick: true` moves participate in selection. `pickTrick(rng,last,airtimeLeft)`
+`trick: true` moves participate in `pickTrick` selection. `pickTrick(rng,last,airtimeLeft)`
 returns a move or `null`; `last` accepts a move or name. Weights come from
 `CFG.moves.weights` at module initialization. Do not keep the old `roll` picker.
 
@@ -402,3 +402,148 @@ gain over three steps, world collision/no penetration, real landing contact
 pitch >270 degrees, hand-to-line <=.25 m after .3 s at several tensions, and bot
 survival/reachable first web. Capture requested landing/start/flip/swing/zip
 screenshots **after integration**; this branch deliberately captures none.
+
+## Continuous flight chain (supersedes the one-trick release recipe)
+
+Keep the old exports/calls; add these imports:
+
+```js
+import { FLIGHT, pickFlight, createFlightChain } from './moves.js';
+```
+
+`FLIGHT` contains the ten existing trick objects unchanged, plus sixteen new
+links: `frontRolls`, `pencilDive`, `arabesque`, `attitudeTurn`, `skySurfer`,
+`cannonball`, `cityLounge`, `scissorKicks`, `twistingDive`, `airRun`, `starPike`,
+`sideSaddle`, `thinker`, `superman`, `corkscrewLayout`, `peekaboo`.
+`MOVES` and `pickTrick` retain their original behavior.
+
+`pickFlight(rng,last,airtimeLeft,speed,vy)` returns a table entry or `null`.
+`last` accepts one name/move or an array (oldest first); the final three names
+are excluded. Speeds are m/s, airtime seconds. Fast descending travel
+(`speed >= 22`, `vy < -4`) gives dive/twist moves 5x weight; slow apexes
+(`speed < 18`, `abs(vy) < 4`) give ballet/thinker/lounge moves 5x weight.
+Eligibility reserves `.3 s` for landing and allows the slowest `.8x` playback:
+`airtimeLeft >= max(move.minAirtime, move.duration/.8 + .3)`.
+
+Create **one chain per player**, using the game's existing seeded RNG, when
+the game creates its physics state: `ph.flight = createFlightChain(g.rng)`.
+Also initialize `ph.flightPressed=false`, `ph.flightLast=null`,
+`ph.flightFrom=null`, `ph.flightBasis=null`, `ph.flightPrelandSec=0`.
+Preserve the chain/history across web attachments; recreate it on restart.
+
+`step(dt,ctx)` advances once per fixed physics tick. Required context fields:
+`airborne` (boolean eligibility), `airtimeLeft`, `speed`, `vy`; cancellation
+flags are `rope`, `pressed`, `preland`. It returns `{move,t,mirror,rate}` plus
+`t0` (event interval start), `started` (first tick of a new link), and `blend`
+(0..1 over `.25 s` **wall time**). The active result object is reused; treat
+it as read-only and consume it before the next step. An inactive result has
+`move:null`. `t` is already rate-scaled: do not multiply it a second time.
+Rates are `.8..9` or `1.1..1.2`, mirrors are `-1/+1`. The short `.65 s` legacy
+tricks use slow rates so their real durations remain at least `.6 s`.
+All links last `.6..1.8 s`, up to one fixed tick of scheduling roundoff.
+There is no wait between links, and history survives cancellation.
+
+In game.js, **before every web press calls `fire`**, including misses, add:
+
+```js
+ph.flightPressed = true;
+ph.flight.step(0, { pressed: true }); // immediate cancellation before any solve
+```
+
+Keep B's cancellation of `ph.motion` as well. For ordinary web releases,
+replace B's `pickTrick`/`pendingTrick` selection with only
+`ph.pendingTrick=null; startMove(ph,MOVES.release,travelBasis(p))`.
+When release ends, clear it and let the chain choose its first link. Zip and
+roof tumble likewise enter the chain after their support move ends. Do not
+start another single trick or select glide on expiry. Do not run the chain
+while a support move, rope, wall, roof, landing or start phase owns the body.
+
+Before each driver call, set `ph.airtimeLeft` to the conservative street
+airtime computed in B/C (use actual foot clearance; use nearer predicted
+contact if the integrated collision predictor provides one). Keep C's preland
+override before the driver. A sudden airtime shortage cancels the current
+link; if no new move fits, the hook below enters preland immediately instead
+of idling in glide. Early preland is intentional when the last-three rule
+and safe-airtime filter leave no choice.
+
+Define `copyTargets` once in ragdoll.js:
+
+```js
+const copyTargets = targets => Object.fromEntries(
+  Object.entries(targets).map(([name,q]) => [name,q.clone()]));
+```
+
+Insert this **one target hook** after the existing support-motion sampling and
+`ph.targetBlend` block, immediately before the root/limb muscles. Here `b`, `t`,
+`h`, `ph`, `p`, the event callbacks and the upright travel `basis` are the
+existing driver locals described above. No additional callback or driver
+signature change is needed.
+
+```js
+const pressed = ph.flightPressed;
+ph.flightPressed = false;
+const free = p.alive && !ph.rope && !ph.ropeOther && !ph.wall && !p.roof
+  && !ph.landing && !ph.motion
+  && ph.startPhase !== 'idle' && ph.startPhase !== 'tumble';
+const f = ph.flight.step(h, {
+  airborne: free, rope: !!(ph.rope || ph.ropeOther), pressed,
+  preland: !!ph.landing || ph.motion?.move === MOVES.preland,
+  airtimeLeft: ph.airtimeLeft,
+  speed: Math.hypot(p.vel.x,p.vel.y,p.vel.z), vy: p.vel.y,
+});
+const flightSpinning = !!f.move?.impulses.some(e => e.angular);
+if (f.move) {
+  if (f.started) {
+    ph.flightFrom = ph.flightLast || copyTargets(t);
+    ph.flightBasis = basis.clone(); // fixed event frame for this link
+    ph.targetBlend = null;
+  }
+  const frame = flightSpinning ? b.pelvis.quaternion : ph.flightBasis;
+  sampleMove(f.move, f.t, frame, t,
+    { mirror: f.mirror, from: ph.flightFrom, alpha: f.blend });
+  for (const e of moveImpulses(f.move, f.t0, f.t, f.mirror)) {
+    if (e.linear) impulse(ph, ph.flightBasis.vmult(new CANNON.Vec3(...e.linear)));
+    if (e.angular) angularImpulse(ph, ph.flightBasis.vmult(new CANNON.Vec3(...e.angular)));
+  }
+  ph.flightPrelandSec = 0;
+} else if (free && !pressed) {
+  if (!ph.flightPrelandSec) ph.flightFrom = ph.flightLast || copyTargets(t);
+  ph.flightPrelandSec += h;
+  ph.targetBlend = null;
+  sampleMove(MOVES.preland, ph.flightPrelandSec, basis, t,
+    { from: ph.flightFrom, alpha: Math.min(1,ph.flightPrelandSec/.25) });
+} else {
+  ph.flightPrelandSec = 0;
+}
+ph.flightLast = copyTargets(t);
+```
+
+The exact flight sampling line is `sampleMove(f.move, f.t, frame, t,
+{ mirror: f.mirror, from: ph.flightFrom, alpha: f.blend })`.
+The optional fifth argument is additive: old four-argument sampling is
+unchanged. `from` must be a **separate snapshot of valid world targets**, never
+`t` itself. Crossfades interpolate parent-local swing rotation vectors and
+twist separately, keeping the ANATOMY cone/hinge/twist bounds even where a
+plain quaternion slerp between valid shoulder poses would escape the cone.
+The previous link blends out during the next link's `.25 s` blend-in; there
+is no intermediate glide pose. Do not apply another world-quaternion blend
+after this hook. `moveImpulses` accepts an optional fourth `mirror`: axial
+angular vectors reflect as `[x,-y,-z]`; linear vectors as `[-x,y,z]`.
+
+Change the root guard from A to **`if (!spinning && !flightSpinning)`**.
+This disables both upright spring and damping throughout a flight spin,
+including its blend. Keep equal/opposite limb muscle torques, and use the
+coherent centre-of-mass angular impulse helper above. Never rotate the root
+by assignment. Preland/landing and web cancellation take priority over all
+flight targets/events; a press discards unfired events, and no clocks wrap.
+
+The expanded fixture tests run both mirrors and `.8/1.2` rate extremes for
+full move durations, with `.25 s` blends, at 120 Hz / 28 solver iterations.
+They test pose-only muscles as before (joint gap <.12 m), **and** angular events
+(joint gap <.13 m, including unchanged legacy 95 N m s corkscrew). Both preserve
+linear momentum within 1e-5 and bound velocities. The forward-roll fixture
+also verifies 2..3.25 integrated pelvis turns at both rates. Deliberate linear
+launch events remain excluded from this momentum check. This is still the
+isolated calibrated PD harness, not the coordinator's actual driver: camera
+readability, collision clearance, apex/dive feel, spin counts/settling under
+live gravity and the delivered hook require integrated play verification.
