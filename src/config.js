@@ -24,7 +24,7 @@ export const CFG = deepFreeze({
   // the ragdoll follower (rig.js)
   rig: {
     iterations: 12, followOmega: 22, followMax: 450, liftSec: .15,
-    standY: .96, wallStance: .78, // pelvis height on a roof, pelvis distance off a wall face
+    standY: .96, wallStance: .78, perchY: .5, // pelvis height on a roof, pelvis distance off a wall face
     gripReach: .86, gripK: 2500, gripC: 70, gripMax: 400, // the hands on the rope line (above the pelvis toward the pivot)
   },
   roofRunSpeed: 8, // m/s: landed on a roof without a rope, the hero runs forward and drops off the edge
@@ -97,7 +97,12 @@ export const CFG = deepFreeze({
   wallRunGravity: 0.15, // fraction of gravity while running
   wallRunSkin: 0.15, // m: the core within heroRadius + this of a face counts as touching it
   wallRunMaxSink: 1, // m/s: a faster fall is cut to this when the run starts
-  wallRunCooldownSec: 0.6, // no new run this long after a wall jump
+  wallRunCooldownSec: 0.6,
+  // the vertical wall run: a facade hit moving mostly UP (or reeling/zipping to a web high on that face)
+  climb: { zipRise: 10, minUp: 4, upShare: 1, speed: 9, sec: 2.5, vaultBelow: .3, vaultUp: 6, vaultIn: 1.2, kickUp: 3, perchSec: .8 },
+  roofIdleSec: 2, // s on a roof with no input: he slows and stands, looking at the skyline
+  // the start: a head-first dive off the start roof's edge (m/s out along the street and up)
+  dive: { out: 6, up: 1.5, botCatchY: 80, lean: .3 }, // lean: rad the body tips past the fall line (head first) // no new run this long after a wall jump
   wallJump: { out: 9, up: 6, fwd: 3 }, // m/s added at the end of a run: away from the wall, up, along the run
   ropeMaxForce: 3e4, // N, the rope's tension limit (70 kg at 40 m/s on a 30 m rope needs ~4 kN); under the ragdoll joints' 4e4, so a rope never tears a wrist apart
   ropeStiffness: 1e8, // cannon SPOOK constraint parameters for the rope
@@ -192,6 +197,10 @@ export const CFG = deepFreeze({
     lookAhead: 0.12, // s: the camera looks at pos + vel * lookAhead
     lookUp: 0, // m above the hero the look point sits (higher puts him low in the frame)
     camAttachDrop: 2.4, // m: on a rope with a high anchor the camera sinks this much (to ~1 m below him)..
+    diveVy: [8, 16], diveUp: 3, diveLookDown: 10, // falling from height: rises behind him, looks down the fall line
+    airVy: 5, airBack: .5, airSec: 3, // (only in the flight after a release) // big air near an apex: pulled back up to 1.5x (the hero >= 1/8 of the screen)
+    edgeUp: 2.5, edgeLookDown: 14, edgeLookAhead: 12, // on the start roof's edge: above behind him, down at the city
+    climbOut: 6, climbBelow: 2.5, climbLookUp: 4, // a climb up a facade: below him, out from the glass, looking up it
     camAttachLift: 1.8, // m: ..and its look point rises this much: it looks ~22 deg up, the anchor's splat in frame
     landDip: 0.6, // m: the camera dips at the hero landing's impact..
     landDipSec: 0.45, // ..and comes back up over this

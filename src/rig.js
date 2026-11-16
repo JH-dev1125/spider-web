@@ -84,15 +84,22 @@ function angularImpulse(ph, J) {
     b.angularVelocity.vadd(omega, b.angularVelocity);
   }
 }
-const noLinear = () => {}; // linear move events are gameplay (the core applies them: startTumble)
+const noLinear = () => {}; // linear move events are gameplay (the core applies them)
 
 // The motion layer's state machine (docs/motion-hooks.md), once per step before the muscles.
 function motionStep(ph, p) {
   const m = ph.motion;
   if (ph.landing) return; // the landing pose holds
-  // a wall run, a roof or a new rope ends any flight move: the gait and the swing own the targets there
-  if (m && ph.startPhase === 'play' && (ph.wall || p.roof || ph.rope)) { startMove(ph, null, travelBasis(p)); return; }
-  if (m && m.move !== MOVES.roofIdle && (m.sec >= m.move.duration || (m.move === MOVES.roofTumble && ph.startPhase === 'play'))) {
+  // the start dive: head first down the fall line (the move's basis follows his velocity)
+  if (ph.startPhase === 'dive') { if (m?.move === MOVES.roofDive) m.basis = diveBasis(p); return; }
+  if (m?.move === MOVES.roofDive) { startMove(ph, null, travelBasis(p)); return; } // a web pulled him out of it
+  // on a roof: the perch after a vault, standing idle, or the run stride (the gait)
+  const hold = p.perch ? MOVES.perch : p.roofIdle ? MOVES.roofIdle : null;
+  if (hold) { if (m?.move !== hold) startMove(ph, hold, travelBasis(p)); return; }
+  if (m && ph.startPhase === 'play' && (m.move === MOVES.perch || m.move === MOVES.roofIdle)) { startMove(ph, null, travelBasis(p)); return; }
+  // a wall run, a climb, a roof or a new rope ends any flight move: the gait and the swing own the targets there
+  if (m && ph.startPhase === 'play' && (ph.wall || ph.climb || p.roof || ph.rope)) { startMove(ph, null, travelBasis(p)); return; }
+  if (m && m.move !== MOVES.roofIdle && m.sec >= m.move.duration) {
     startMove(ph, null, travelBasis(p)); // the flight chain (ragdoll.js) takes over from here
   }
   // prelanding: falling free toward the street, short of the landing lead time: legs out, root upright
@@ -100,9 +107,27 @@ function motionStep(ph, p) {
     && airtime(ph, p) < CFG.moves.landingLeadSec) startMove(ph, MOVES.preland, travelBasis(p));
 }
 
-// Stride goals for the feet on a wall run or a roof run (visual: the core does the running). legTargets reaches them.
+// Head first along his velocity: the basis whose +y (head) points down the fall line, chest toward the street below.
+function diveBasis(p) {
+  const v = p.vel, hz = Math.hypot(v.x, v.z), fall = Math.atan2(v.y, Math.max(hz, .1));
+  return new C.Quaternion().setFromEuler(Math.PI / 2 - fall + CFG.dive.lean, hz > .1 ? Math.atan2(v.x, v.z) : (p.headingYaw || 0), 0, 'YZX');
+}
+
+// Stride goals for the feet on a wall run, a climb or a roof run (visual: the core moves). legTargets reaches them.
 function gait(ph, p) {
   const st = ph.street, a = st.lat, f = st.axis, fd = st.dir, rt = right(st), root = ph.rag.bodies.pelvis;
+  if (ph.climb) { // up the glass: soles on the face, striding upward
+    ph.gait ||= { L: { goal: new C.Vec3() }, R: { goal: new C.Vec3() } };
+    for (const side of ['L', 'R']) {
+      const g = ph.gait[side], sd = side === 'L' ? -1 : 1;
+      const phase = (ph.rag.time / .36 + (side === 'R' ? .5 : 0)) % 1, stance = phase < .5;
+      const lift = stance ? 0 : Math.sin((phase - .5) / .5 * Math.PI) * .18;
+      g.goal.set(0, root.position.y - .78 + (stance ? .25 - phase : -.25 + (phase - .5)) * .9, 0);
+      g.goal[a] = ph.climb.x + ph.climb.n * (.06 + lift);
+      g.goal[f] = root.position[f] + sd * ph.climb.n * rt[a] * .11;
+    }
+    return;
+  }
   const roofY = p.roof || ph.startPhase === 'idle' ? ph.hero.position.y - CFG.heroRadius : null;
   if (!ph.wall && roofY === null) { ph.gait = null; return; }
   ph.gait ||= { L: { goal: new C.Vec3() }, R: { goal: new C.Vec3() } };
@@ -123,8 +148,10 @@ function gait(ph, p) {
 function liftTarget(ph, p) {
   const out = new C.Vec3();
   if (ph.landing) out.y = CFG.moves.landingPelvisY - CFG.heroRadius;
+  else if (p.perch) out.y = CFG.rig.perchY - CFG.heroRadius;
   else if (p.roof || ph.startPhase === 'idle') out.y = CFG.rig.standY - CFG.heroRadius;
   else if (ph.wall) out[ph.street.lat] = ph.wall.n * (CFG.rig.wallStance - CFG.heroRadius);
+  else if (ph.climb) out[ph.street.lat] = ph.climb.n * (CFG.rig.wallStance - CFG.heroRadius);
   return out;
 }
 

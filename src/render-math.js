@@ -68,18 +68,33 @@ export function followCamera(player, prev, dt, structures = [], street = START) 
   // on a rope, the camera drops below his level and looks up toward the anchor, so a high web's splat stays in the
   // frame (up: 0 with no rope or a level anchor, 1 for one 30 m or more above him)
   const up = player.anchor ? Math.max(0, Math.min(1, (player.anchor.y - player.pos.y) / 30)) : 0;
-  const y = pos.y + R.camUp - up * R.camAttachDrop, z = pos.z - R.camBack;
+  const free = !player.anchor && !player.roof && !player.wall && !player.climb && player.alive !== false;
+  // the reference video's framings (each a 0..1 weight, so they blend): a fast fall from height (dive: the camera
+  // rises behind him and pitches down the fall line), big air near the apex (pulled back: he gets small against the
+  // sky, >= 1/8 of the screen), standing on the start roof's edge (high behind him, looking down at the city)
+  const dive = free ? clamp01((-vel.y - R.diveVy[0]) / (R.diveVy[1] - R.diveVy[0])) : 0;
+  const air = free && player.sinceRelease < R.airSec ? clamp01(1 - Math.abs(vel.y) / R.airVy) * (1 - dive) : 0;
+  const edge = player.phase === 'idle' ? 1 : 0;
+  const back = R.camBack * (1 + R.airBack * air - .25 * dive - .2 * edge);
+  let y = pos.y + R.camUp - up * R.camAttachDrop + R.diveUp * dive + R.edgeUp * edge, z = pos.z - back;
   // look down the street, halfway between the camera's line and the hero's (he hugs a wall: still near the middle)
   // sideways and up/down the lead is capped, or a fast zip, fall or wall jump swings the hero to the frame's edge
   const side = (v) => Math.max(-R.lookMaxSide, Math.min(R.lookMaxSide, v * R.lookAhead));
-  const lx = (x + pos.x) / 2 + side(vel.x), ly = pos.y + R.lookUp + up * R.camAttachLift + side(vel.y), lz = pos.z + Math.max(vel.z * R.lookAhead, R.camBack * 0.6);
+  let lx = (x + pos.x) / 2 + side(vel.x), ly = pos.y + R.lookUp + up * R.camAttachLift + side(vel.y) - R.diveLookDown * dive - R.edgeLookDown * edge;
+  let lz = pos.z + Math.max(vel.z * R.lookAhead, R.camBack * 0.6) + R.edgeLookAhead * edge;
+  let cx = x;
+  if (player.climb) { // straight up a facade: below him and out from the glass, looking up it
+    const lat = street.lat || 'x', n = toL({ x: lat === 'x' ? player.climb : 0, y: 0, z: lat === 'z' ? player.climb : 0 });
+    cx = pos.x + n.x * R.climbOut; y = pos.y - R.climbBelow; z = pos.z - R.camBack * .6 + n.z * R.climbOut;
+    lx = pos.x; ly = pos.y + R.climbLookUp; lz = pos.z + R.camBack * .6;
+  }
   const pc = prev && toL(prev), pl = prev && toL({ x: prev.lx, y: prev.ly, z: prev.lz });
   // no prev, or a restart teleported the hero: snap
-  const snap = !prev || Math.hypot(pc.x - x, pc.y - y, pc.z - z) > R.camSnap;
+  const snap = !prev || Math.hypot(pc.x - cx, pc.y - y, pc.z - z) > R.camSnap;
   const k = CFG.camFollow, a = 1 - Math.exp(-k * dt), b = 1 - Math.exp(-CFG.fovFollow * dt);
   const ex = vel.x / k, ey = vel.y / k, ez = vel.z / k;
-  const c = snap ? { x, y, z, lx, ly, lz, fovDeg: fov } : {
-    x: pc.x + (x + ex - pc.x) * a,
+  const c = snap ? { x: cx, y, z, lx, ly, lz, fovDeg: fov } : {
+    x: pc.x + (cx + ex - pc.x) * a,
     y: pc.y + (y + ey - pc.y) * a,
     z: pc.z + (z + ez - pc.z) * a,
     lx: pl.x + (lx + ex - pl.x) * a,
@@ -87,7 +102,7 @@ export function followCamera(player, prev, dt, structures = [], street = START) 
     lz: pl.z + (lz + ez - pl.z) * a,
     fovDeg: prev.fovDeg + (fov - prev.fovDeg) * b,
   };
-  const dist = Math.hypot(x - pos.x, y - pos.y, z - pos.z);
+  const dist = Math.hypot(cx - pos.x, y - pos.y, z - pos.z);
   leash(c, pos, dist * CFG.camLeash, ['x', 'y', 'z']);
   c.z = Math.min(c.z, pos.z - R.camBack * 0.5); // never level with or ahead of him..
   leash(c, { x: lx, y: ly, z: lz }, dist * (CFG.camLeash - 1), ['lx', 'ly', 'lz']); // the look point stays near his..

@@ -1,5 +1,6 @@
 import { CFG } from './config.js';
 import { createGame, stepGame, createBot, startGame } from './game.js';
+import { placeHero } from './player.js';
 import { createChargeTracker } from './input-core.js';
 import { attachKeyboard } from './keyboard.js';
 import { startHand } from './hand.js';
@@ -80,13 +81,14 @@ window.addEventListener('keydown', (e) => {
     .catch((err) => { clearTimeout(timer); if (attempt === id) { console.warn('hand mode unavailable:', err); hand = 'failed'; } });
 });
 
-// From the title: the same game - the hero back-tumbles off the start roof. From the result screen: a new game.
+// From the title: the same game - the hero dives head first off the start roof. From the result screen: a new game.
 function start() {
   if (mode === 'over') g = newGame();
   startGame(g);
   actions = [];
   tracker.cancel(); // a key held through death must not release anything on the first frame
-  bot = autoplay ? createBot({ zip: q.has('autozip'), turn: q.has('autoturn') ? q.get('autoturn') || 'alt' : null }) : null;
+  bot = autoplay ? createBot({ zip: q.has('autozip'), turn: q.has('autoturn') ? q.get('autoturn') || 'alt' : null,
+    freeSec: Number(q.get('free')) || undefined }) : null; // ?free=<sec>: fly that long between ropes (the flight chain, big air)
   mode = 'play';
 }
 
@@ -222,7 +224,21 @@ function frame() {
   if (!q.has('nohud')) { drawHud(); drawHandStatus(); } // ?nohud: the bare scene (screenshots)
   requestAnimationFrame(frame);
 }
-if (autoplay) {
+// ?stage=climb|roof (screenshots): start beside / on top of a street-side tower near the start, no bot: thrown up
+// its facade (a vertical wall run, the vault and perch) or standing on its roof (the run, then the idle).
+const stage = q.get('stage');
+if (stage) {
+  start(); bot = null;
+  const W = CFG.corridorHalfWidth, s = g.world.structures.find((b) => b.kind === 'tower' && Math.abs(b.min.x - W) < .5
+    && b.min.z < 140 && b.max.z > 40 && b.max.y > 60);
+  if (s) {
+    const z = Math.min(s.max.z - 10, Math.max(s.min.z + 10, 80));
+    g.phys.startPhase = g.player.phase = 'play';
+    if (stage === 'climb') placeHero(g.phys, g.player, { x: W - 2, y: s.max.y - 22, z }, { x: 6, y: 12, z: 1 });
+    else placeHero(g.phys, g.player, { x: W + .8, y: s.max.y + CFG.heroRadius, z }, { x: 0, y: 0, z: 0 }); // (roofs: the street margin)
+  }
+  for (let t = 0; t < (Number(q.get('t')) || 0); t += CFG.maxDt) update(CFG.maxDt);
+} else if (autoplay) {
   start();
   // ?t=<sec> fast-forwards the autoplay in maxDt steps (headless screenshots barely advance rAF)
   for (let s = 0; s < (Number(q.get('t')) || 0); s += CFG.maxDt) update(CFG.maxDt);

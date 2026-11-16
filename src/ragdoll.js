@@ -163,7 +163,10 @@ export function driveRagdoll(ph, p, h, impulse, angularImpulse) {
   if (!ph.wall && !p.roof && !p.anchor) {
     if (p.mode === 'glide') basis.setFromEuler(.35, 0, 0);
   }
-  if (ph.wall || p.roof || !p.anchor) yaw.mult(basis, basis);
+  if (ph.climb) { // straight up the facade: upright, chest to the glass, leaning back a little off it
+    const n = ph.climb.n, lat = st?.lat || 'x';
+    basis.setFromEuler(-.12, Math.atan2(lat === 'x' ? -n : 0, lat === 'z' ? -n : 0), 0, 'YZX');
+  } else if (ph.wall || p.roof || !p.anchor) yaw.mult(basis, basis);
   for (const a of ANATOMY) t[a.name].copy(basis);
   for (const side of ['L', 'R']) {
     const sd = side === 'L' ? -1 : 1;
@@ -175,12 +178,16 @@ export function driveRagdoll(ph, p, h, impulse, angularImpulse) {
       const u = ph.anchor.position.vsub(b.pelvis.position); u.normalize();
       const goal = b.pelvis.position.vadd(u.scale(CFG.rig.gripReach - (side === ph.webSide ? 0 : .12)));
       armTargets(b, t, side, goal);
+    } else if (ph.climb) { // hand over hand up the glass, opposite to the stride
+      const s = Math.sin((r.time / .36 + (side === 'R' ? .5 : 0)) * 2 * Math.PI), q = new C.Quaternion();
+      q.setFromEuler(-1.9 - .7 * s, 0, sd * .25); basis.mult(q, upper);
+      q.setFromEuler(-.6 + .4 * s, 0, 0); upper.mult(q, lower); t['hand' + side].copy(lower);
     } else {
       const q = new C.Quaternion();
       q.setFromEuler(-.25, 0, sd * (ph.wall || p.roof ? .25 : 1.05)); basis.mult(q, upper);
       q.setFromEuler(-.35, 0, 0); upper.mult(q, lower); t['hand' + side].copy(lower);
     }
-    if (ph.wall || p.roof) {
+    if (ph.wall || p.roof || ph.climb) {
       const gait = ph.gait?.[side];
       if (gait) legTargets(r, side, gait.goal, basis);
     } else if (p.mode === 'tuck' || p.mode === 'walljump') {
@@ -222,7 +229,7 @@ export function driveRagdoll(ph, p, h, impulse, angularImpulse) {
   if (ph.flight) {
     const pressed = ph.flightPressed || ph.webOut; // (a web in flight holds the chain off: the shot owns the arms)
     ph.flightPressed = false;
-    const free = p.alive && !ph.rope && !ph.wall && !p.roof && !ph.landing && !ph.motion && ph.startPhase === 'play';
+    const free = p.alive && !ph.rope && !ph.wall && !ph.climb && !p.roof && !ph.landing && !ph.motion && ph.startPhase === 'play';
     const f = ph.flight.step(h, { airborne: free, rope: !!ph.rope, pressed, preland: !!ph.landing,
       airtimeLeft: ph.airtimeLeft ?? 0, speed: Math.hypot(p.vel.x, p.vel.y, p.vel.z), vy: p.vel.y });
     flightSpinning = !!f.move?.impulses.some(e => e.angular);
@@ -246,7 +253,7 @@ export function driveRagdoll(ph, p, h, impulse, angularImpulse) {
   // Balance assistance supplies an upright reference (t.pelvis); joints still react against one another. Off while a
   // move spins him (it would fight the flip); stiff for the landing hold and on walls and roofs.
   const spinning = motion && motion.sec < motion.move.duration && motion.move.impulses.some(e => e.angular);
-  const firm = ph.landing || ph.wall || p.roof || ph.startPhase === 'idle', M = CFG.muscle;
+  const firm = ph.landing || ph.wall || p.roof || ph.climb || ph.startPhase !== 'play', M = CFG.muscle;
   if (!spinning && !flightSpinning) muscle(r.root, b.pelvis, t.pelvis, firm ? M.rootFirm[0] : M.root[0], firm ? M.rootFirm[1] : M.root[1]);
   else relax(r.root);
   const stiff = ph.landing && ph.landing.sec < CFG.moves.landingStiffSec ? 1.4 : 1; // the impact, then the hold

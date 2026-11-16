@@ -146,7 +146,7 @@ const heroScreen = (c, p) => {
   return { height: CFG.character.height / (2 * half), sx: dot(d, r) / half, sy: dot(d, u) / half, depth };
 };
 const W = CFG.corridorHalfWidth, DT = 1 / 60;
-const WANT = Math.hypot(R.camWallGap, R.camUp, R.camBack); // the largest desired offset (at a wall)
+const WANT = Math.hypot(R.camWallGap, R.camUp + R.diveUp, R.camBack * (1 + R.airBack)); // the largest desired offset (at a wall, diving, big air)
 // (deep blocks: a zip to a high web can fling him over the roof, and he should land on it, not in a strip behind)
 const corridor = (g) => {
   g.world.structures = [
@@ -170,9 +170,9 @@ function filmBot(seed, zip, sec, setupCourse, check) {
   return seen;
 }
 const leashOk = ({ c, p, at }) => assert.ok(Math.hypot(c.x - p.pos.x, c.y - p.pos.y, c.z - p.pos.z) <= WANT * CFG.camLeash + 1e-9, `${at}: beyond the leash`);
-const framed = (s) => s.depth > 0 && s.height >= 0.2 && Math.abs(s.sx) < 0.6 * 16 / 9 && Math.abs(s.sy) < 0.6;
+const framed = (s) => s.depth > 0 && s.height >= 1 / 8 && Math.abs(s.sx) < 0.6 * 16 / 9 && Math.abs(s.sy) < 0.6;
 
-test('camera: through swing ends, fast releases, zips and wall runs the hero stays >= 1/5 of the screen, central, leashed', () => {
+test('camera: through swing ends, fast releases, zips and wall runs the hero stays >= 1/8 of the screen (big air), central, leashed', () => {
   const seen = new Set();
   const check = (f) => {
     leashOk(f);

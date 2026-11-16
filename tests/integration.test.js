@@ -49,7 +49,7 @@ test('core + follower: the core trajectory is identical with or without the ragd
   }
 });
 
-test('rooftop start: he stands on the start tower edge with no input for 3 s, then Space back-tumbles him off it', () => {
+test('rooftop start: he stands on the start tower edge with no input for 3 s, then Space dives him off it', () => {
   const g = createGame(3, { start: 'roof' }), s = g.world.start;
   assert.ok(g.world.structures.includes(s), 'the start tower is a structure');
   const near = g.world.structures.filter((t) => t !== s && t.max.z > -60 && t.min.z < 160 && t.kind === 'tower');
@@ -62,15 +62,13 @@ test('rooftop start: he stands on the start tower edge with no input for 3 s, th
   assert.ok(g.phys.rag.bodies.pelvis.position.y > s.max.y + 0.8, 'upright');
   assert.ok(g.phys.rag.bodies.head.position.y > head0 - 0.3, 'standing');
   assert.ok(startGame(g));
-  let left = null, pitch = 0;
+  let left = null;
   for (let i = 0; i < 90; i++) {
     stepGame(g, DT, []);
-    if (g.phys.startPhase === 'tumble') pitch += Math.abs(g.phys.rag.bodies.pelvis.angularVelocity.x) * DT;
     if (left === null && g.player.pos.z > s.max.z + 0.3) left = i * DT;
   }
   assert.ok(left !== null && left <= 0.5, `left the roof at ${left}`);
-  assert.ok(pitch * 180 / Math.PI > 270, `pitched ${(pitch * 180 / Math.PI).toFixed(0)} deg`);
-  assert.equal(g.phys.startPhase, 'play');
+  assert.equal(g.phys.startPhase, 'dive');
   // and a first web holds before he gets near the street
   const bot = createBot();
   let held = false;

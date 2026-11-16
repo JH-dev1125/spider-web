@@ -30,6 +30,10 @@ export const createPlayer = () => ({
   webSide: 'R',
   ragdoll: null, // the follower's bodies (rig.js), read-only, null without a rig
   headingYaw: 0,
+  climb: 0, // climbing STRAIGHT UP a facade: its outward normal along the street's lateral axis, else 0
+  perch: false, // crouched on a roof edge after a vault
+  roofIdle: false, // standing still on a roof (no input for roofIdleSec)
+  phase: 'play', // the start: 'idle' (on the start roof's edge) | 'dive' (head first off it) | 'play'
 });
 
 // rig: false builds the core alone (bots, metrics: fast and deterministic); the game always has the follower.
@@ -53,7 +57,7 @@ export function createPhysics(p, { rig = true, seed = 1 } = {}) {
   world.addBody(anchor);
   const ph = { world, hero, anchor, rope: null, reelRate: 0, boxes: new Map(), acc: 0, bounced: false,
     wall: null, wallCool: 0, webSide: 'R', zipKick: null, zipCooldown: 0, landing: null, cornerRope: false,
-    startPhase: 'play', tumbleSec: 0, load: 0, prevVel: hero.velocity.clone(),
+    startPhase: 'play', load: 0, prevVel: hero.velocity.clone(), climb: null, perch: null, vault: false, roofSec: 0,
     street: makeStreet('z', 0, 1, 0), // the street frame game.js keeps current: wall runs and roof runs go along it
     bound: null, // (pos, vel) => bool: game.js keeps the hero inside the street corridors (see boundStep)
     // the follower's motion layer (rig.js, docs/motion-hooks.md); gameplay never reads these
@@ -184,6 +188,7 @@ export function launchZip(ph, p) {
   const head = Math.hypot(v.x, v.z) > .1 ? { x: v.x, y: 0, z: v.z } : facing;
   const rd = ph.anchor.position.vsub(ph.hero.position);
   const { dv } = zipLaunch({ x: v.x, y: v.y, z: v.z }, head, { x: rd.x, y: rd.y, z: rd.z }, CFG);
+  ph.zipFrom = { x: ph.anchor.position.x, y: ph.anchor.position.y, z: ph.anchor.position.z, sec: 0, rise: rd.y }; // (a climb cue)
   release(ph, p);
   ph.pendingTrick = null;
   ph.zipCooldown = CFG.zipCooldownSec;
@@ -192,15 +197,15 @@ export function launchZip(ph, p) {
   return true;
 }
 
-// The rooftop start: Space / open palm on the title. The leap off the start roof's edge, down the street (the
-// tumble's launch: MOVES.roofTumble's time-zero delta-v, in the roof-facing frame), then he is in play.
-export function startTumble(ph, p) {
+// The rooftop start: Space / open palm on the title. A head-first DIVE off the start roof's edge, out over the street
+// (the follower spreads and sweeps its arms back, streamlined). He is in play on his first web press, or when the
+// street comes close (the prelanding), whichever is first.
+export function startDive(ph, p) {
   if (ph.startPhase !== 'idle') return false;
-  ph.startPhase = 'tumble'; ph.tumbleSec = 0; p.roof = false;
-  const basis = new CANNON.Quaternion().setFromEuler(0, Math.PI, 0);
-  const launch = MOVES.roofTumble.impulses.find((e) => e.linear && e.time === 0)?.linear || [0, 3.5, -5];
-  ph.hero.velocity.vadd(basis.vmult(new CANNON.Vec3(...launch)), ph.hero.velocity);
-  startMove(ph, MOVES.roofTumble, basis);
+  ph.startPhase = p.phase = 'dive'; p.roof = false; p.roofIdle = false;
+  const h = heading(ph.street);
+  ph.hero.velocity.vadd(new CANNON.Vec3(h.x * CFG.dive.out, CFG.dive.up, h.z * CFG.dive.out), ph.hero.velocity);
+  startMove(ph, MOVES.roofDive, travelBasis(p));
   return true;
 }
 
@@ -242,12 +247,48 @@ function wallStep(ph, p, v0, events) {
   if (ph.wallCool > 0 || !p.alive) return;
   const face = sideFace(ph, hero.position, CFG.wallRunSkin);
   if (!face || -face.n * v0[a] < CFG.wallRunMinSpeed) return; // not moving into that face fast enough
+  // moving mostly UP into it (or zipping toward a web high on this same face): straight up the facade
+  const C = CFG.climb, q = ph.zipFrom;
+  const webUp = q && q.sec < 1.5 && q.rise > C.zipRise && Math.abs(q[a] - face.x) < 1 && q.y > hero.position.y + 5;
+  if ((v0.y > C.minUp && v0.y >= C.upShare * Math.abs(v0[f])) || webUp) {
+    if (release(ph, p)) events.push('released');
+    ph.climb = { ...face, sec: 0 }; p.climb = face.n; p.roof = false;
+    v[a] = 0; v[f] *= .3; v.y = Math.max(v.y, C.speed);
+    events.push('wallclimb');
+    return;
+  }
   ph.wall = { ...face, sec: 0, fwd: v0[f] };
   v[a] = 0;
   v.y = Math.max(v.y, -CFG.wallRunMaxSink);
   v[f] = v0[f];
   p.wall = face.n; p.roof = false;
   events.push('wallrun');
+}
+
+// Climbing straight up a facade (the core: a steady climb; the follower strides up the glass). At the roof edge he
+// vaults over it and perches; short of it after climb.sec he kicks off backward.
+function climbStep(ph, p, events) {
+  const c = ph.climb, v = ph.hero.velocity, h = CFG.physicsStep, a = ph.street.lat, f = ph.street.axis, C = CFG.climb;
+  c.sec += h;
+  if (ph.hero.position.y >= c.s.max.y - C.vaultBelow) { // the ledge: up and over, onto the roof
+    v.y = C.vaultUp; v[a] = 0; v[f] = 0;
+    ph.vault = { n: c.n, top: c.s.max.y, sec: 0 }; ph.climb = null; p.climb = 0; events.push('vault');
+    return;
+  }
+  if (c.sec >= C.sec || !ph.boxes.has(c.s.id)) { // not at the top: kick off backward, away from the face
+    v[a] = c.n * CFG.wallJump.out; v.y = C.kickUp; v[f] = 0;
+    ph.climb = null; p.climb = 0; ph.wallCool = CFG.wallRunCooldownSec; events.push('walljump');
+    return;
+  }
+  v[a] = -c.n * .5; v.y = C.speed; v[f] *= Math.exp(-6 * h); // on the glass, climbing
+}
+
+// The vault: straight up past the ledge, then just over it, landing a step inside the edge (the perch).
+function vaultStep(ph) {
+  const w = ph.vault, v = ph.hero.velocity, a = ph.street.lat, C = CFG.climb;
+  if ((w.sec += CFG.physicsStep) > 1.5) { ph.vault = null; return; }
+  if (ph.hero.position.y < w.top + CFG.heroRadius + .05) { v.y = Math.max(v.y, C.vaultUp); v[a] = 0; }
+  else { v[a] = -w.n * C.vaultIn; v.y = Math.min(v.y, 0); }
 }
 
 // The block interiors are out of bounds (game.js: clampToStreets). Instead of moving him, the velocity into the
@@ -294,9 +335,11 @@ function coreStep(ph, p, events) {
   const k = CFG.airDrag * CFG.heroMass * v.length();
   hero.force.x -= k * v.x; hero.force.y -= k * v.y; hero.force.z -= k * v.z; // quadratic drag (cleared by every step)
   const v0 = { x: v.x, y: v.y, z: v.z };
-  if (ph.startPhase === 'tumble' && (ph.tumbleSec += h) >= MOVES.roofTumble.duration) { ph.startPhase = 'play'; p.headingYaw = 0; }
+  if (ph.startPhase === 'dive' && v.y < 0 && airtime(ph, p) < CFG.moves.landingLeadSec) ph.startPhase = p.phase = 'play';
+  if (ph.climb) hero.force.y += CFG.heroMass * CFG.gravity; // the climb carries his weight
   if (ph.wall) hero.force.y += CFG.heroMass * CFG.gravity * (1 - CFG.wallRunGravity); // barely sinks on the wall
   ph.zipCooldown = Math.max(0, ph.zipCooldown - h);
+  if (ph.zipFrom) ph.zipFrom.sec += h;
   if (ph.zipKick) { // the slingshot's delta-v, split over zipLaunchSteps steps
     const z = ph.zipKick, n = CFG.zipLaunchSteps;
     v.x += z.dv.x / n; v.y += z.dv.y / n; v.z += z.dv.z / n;
@@ -319,7 +362,9 @@ function coreStep(ph, p, events) {
   }
   const P0 = { x: hero.position.x, y: hero.position.y, z: hero.position.z };
   ph.world.step(h);
-  wallStep(ph, p, v0, events);
+  if (ph.climb) climbStep(ph, p, events);
+  else if (ph.vault && !p.roof) vaultStep(ph);
+  else wallStep(ph, p, v0, events);
   if (ph.bound && !idle) boundStep(ph);
   if (ph.rope && !ropeStep(ph, p, P0, STRUCT)) { release(ph, p); events.push('snapped'); } // can't bend around it
   // The rope's tension (for the follower's strain pose): T = M (|v|^2 - (v.u)^2) / L + M g (-u_y), u = pivot -> hero.
@@ -335,16 +380,25 @@ function coreStep(ph, p, events) {
   }
   ph.load += (Math.min(1, tension / CFG.moves.strainForce) - ph.load) * Math.min(1, h / .1);
   // standing on a roof with no rope: run along the street so a landing never leaves the hero stuck
-  p.roof = !idle && ph.startPhase !== 'tumble' && !ph.wall && !ph.rope && hero.position.y > CFG.heroRadius + 1
+  p.roof = !idle && ph.startPhase !== 'dive' && !ph.wall && !ph.climb && !ph.rope && hero.position.y > CFG.heroRadius + 1
     && !!raycast(ph, hero.position, DOWN, CFG.heroRadius + .15);
+  if (p.roof && ph.vault) { ph.vault = false; ph.perch = { sec: 0 }; } // over the ledge: a crouched perch on the edge
+  if (!p.roof) { ph.perch = null; ph.roofSec = 0; }
+  p.perch = !!ph.perch; p.roofIdle = false;
   if (p.roof) {
     const f = ph.street.axis, fd = ph.street.dir;
-    if (v[f] * fd < CFG.roofRunSpeed) v[f] = fd * CFG.roofRunSpeed;
+    ph.roofSec += h;
+    if (ph.perch) { // crouched on the edge a moment, then he runs on
+      v.x = v.z = 0;
+      if ((ph.perch.sec += h) >= CFG.climb.perchSec) { ph.perch = null; ph.roofSec = 0; }
+    } else if (ph.roofSec >= CFG.roofIdleSec) { // no input for a while: he slows and stands, looking out
+      v.x *= Math.exp(-5 * h); v.z *= Math.exp(-5 * h); p.roofIdle = true;
+    } else if (v[f] * fd < CFG.roofRunSpeed) v[f] = fd * CFG.roofRunSpeed;
   }
   if (idle) { v.x *= .9; v.z *= .9; } // standing at his spot on the start roof's edge
   if (hero.position.y <= CFG.heroRadius + .05 + CFG.landingGap) { // his soles reach the street: the hero landing
     release(ph, p);
-    ph.wall = null; p.wall = 0; p.roof = false; p.alive = false; ph.zipKick = null; ph.pendingTrick = null;
+    ph.wall = null; p.wall = 0; p.roof = false; p.alive = false; ph.climb = null; p.climb = 0; ph.perch = null; p.perch = false; ph.zipKick = null; ph.pendingTrick = null;
     ph.landing = { sec: 0, at: { x: hero.position.x, y: 0, z: hero.position.z }, speed: v.length() };
     v.y = 0; // the legs take the fall (the core then settles onto the street and slides to rest)
     startMove(ph, MOVES.landing, travelBasis(p));

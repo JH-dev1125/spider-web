@@ -96,6 +96,17 @@ export const MOVES = {
     upperArmL: [.04, 0, -.05], upperArmR: [-.04, 0, .05], forearmL: [-.12, 0, 0], forearmR: [-.12, 0, 0] })], [3, idle]]),
   roofTumble: move('roofTumble', [[0, idle], [.12, tight], [.65, tight], [1, glide]],
     { impulses: [{ time: 0, linear: [0, 3.5, -5], angular: [165, 0, 0] }] }), // (165: ~300 deg of pitch on the integrated rig)
+  // the start: head first off the roof (the rig turns the basis onto the fall line), arms spread and swept back
+  roofDive: move('roofDive', [[0, idle], [.3, pose({ chest: [-.12, 0, 0], head: [-.45, 0, 0],
+    upperArmL: [.75, 0, -.85], upperArmR: [.75, 0, .85], forearmL: [-.12, 0, 0], forearmR: [-.12, 0, 0],
+    thighL: [.08, 0, -.05], thighR: [.08, 0, .05], shinL: [.1, 0, 0], shinR: [.1, 0, 0], footL: [.5, 0, 0], footR: [.5, 0, 0] })],
+    [1, pose({ chest: [-.15, 0, 0], head: [-.5, 0, 0],
+    upperArmL: [.95, 0, -.7], upperArmR: [.95, 0, .7], forearmL: [-.1, 0, 0], forearmR: [-.1, 0, 0],
+    thighL: [.1, 0, -.04], thighR: [.1, 0, .04], shinL: [.08, 0, 0], shinR: [.08, 0, 0], footL: [.55, 0, 0], footR: [.55, 0, 0] })]]),
+  // crouched on a roof edge after the vault: deep knees, hands down between them, looking out
+  perch: move('perch', [[0, idle], [.2, pose({ pelvis: [.35, 0, 0], chest: [.35, 0, 0], head: [-.55, 0, 0],
+    upperArmL: [-.55, 0, -.15], upperArmR: [-.55, 0, .15], forearmL: [-.35, 0, 0], forearmR: [-.35, 0, 0],
+    thighL: [-1.8, 0, -.35], thighR: [-1.8, 0, .35], shinL: [2.35, 0, 0], shinR: [2.35, 0, 0], footL: [-.3, 0, 0], footR: [-.3, 0, 0] })]]),
   swingReach: move('swingReach', [[0, glide], [.25, reach]]),
   swingStrain: move('swingStrain', [[0, reach], [.25, strain]]),
   release: move('release', [[0, reach], [.06, pose({ upperArmL: [.2, 0, -.8],
