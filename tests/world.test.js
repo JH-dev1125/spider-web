@@ -231,8 +231,8 @@ test('cranes: jibs span most of the street within W reach, at least every ~400 m
     assert.ok(jibs.length >= span / 400, `seed ${seed}: ${jibs.length} jibs in ${span.toFixed(0)} m`);
     for (const j of jibs) {
       assert.ok(j.min.x < -5 && j.max.x > 5, `${j.id} does not reach across the centreline`);
-      const rise = j.min.y - 60, run = rise / Math.tan(CFG.aimUpDeg.mid * Math.PI / 180); // from a 60 m flight height
-      assert.ok(Math.hypot(rise, run) < CFG.webRange, `${j.id} out of W reach from 60 m`);
+      const rise = j.min.y - 51, run = rise / Math.tan(CFG.aimUpDeg.mid * Math.PI / 180); // from a 51 m flight height (30 m x 1.7)
+      assert.ok(Math.hypot(rise, run) < CFG.webRange, `${j.id} out of W reach from 51 m`);
     }
   }
 });

@@ -20,7 +20,7 @@ const COL_STEP = 9;
 export const TALL = ['deco', 'empire', 'clock', 'glass', 'gothic', 'pyramid', 'billboard', 'terrace'];
 export const LOW = ['brownstone', 'walkup', 'warehouse'];
 export const ARCHETYPES = [...TALL, ...LOW];
-export const TALL_MIN = 72; // a lot at least this tall gets a tower archetype, lower ones a low-rise (2x city)
+export const TALL_MIN = 61; // a lot at least this tall gets a tower archetype, lower ones a low-rise (1.7x city)
 
 // Footprint of a lot on a street corridor face: side sd (-1 left, +1 right), w = corridor half width.
 export const streetLot = (id, sd, w, depth, z0, z1) => ({

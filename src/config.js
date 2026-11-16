@@ -46,7 +46,7 @@ export const CFG = deepFreeze({
   turnInset: 3, // m: ..counted only this far inside the intersection square (at its edge he'd turn into the corner tower)
   turnReach: 14, // bot: a turning web lands at most this far short of the corner's edge
   behindDistance: 40, // and are removed this far behind
-  startHeight: 120, // (the mid-air start of the test courses; the game starts on world.startTower)
+  startHeight: 94, // (the mid-air start of the test courses; the game starts on world.startTower)
   startRise: 6, // m: the start tower's roof over the tallest roof near the start (world.startTower)
   startDepth: 22, // m: the start tower's depth along the street, behind z = -2
   startSpeed: 12, // m/s forward at the start: a gentle leap, not a launch
@@ -66,7 +66,7 @@ export const CFG = deepFreeze({
     damp: 0.4, // 1/s: lateral velocity damping (only ever removes energy)
     maxAccel: 2.5, // m/s^2 cap on the whole steering acceleration (muscle, not a motor)
   },
-  webRange: 200, // from beside one wall reaches the far wall; long enough for the 2x city's high webs
+  webRange: 170, // from beside one wall reaches the far wall; long enough for the 1.7x city's high webs
   webSpeed: 300, // m/s: a 54 m web lands in 0.18 s; a miss shows at full range after 0.45 s
   reelSpeed: 6, // (was 8: the reel pumped speed too fast; 4 starved the bot of height) m/s the held rope shortens at full reel (a hand-over-hand pull; the constraint turns it into tension)
   reelAccel: 4, // m/s^2 the reel spins up at once the rope is taut, so it never jerks the hero
@@ -110,15 +110,15 @@ export const CFG = deepFreeze({
     startZ: -20,
     easyZ: 400, // easy course before the difficulty ramp starts
     rampZ: 4000, // metres from easiest to hardest
-    goodH: 150, // a tower on the corridor face at least this tall is a "sure anchor" (a mid web from flight height ~100 m lands on it)
+    goodH: 120, // a tower on the corridor face at least this tall is a "sure anchor" (a mid web from flight height ~80 m lands on it)
     maxGapStart: 30, // longest z stretch with no sure anchor on either side, early..
     maxGapEnd: 70, // ..and late (a release at ~25 m/s carries > 100 m, so 70 m stays flyable)
     alleyStart: [0, 0.8], // empty z between lots: early seams are narrower than the hero (1 m), later alleys he can fall into
     alleyEnd: [2, 12],
     towerLen: [24, 70],
-    towerHStart: [220, 340], // 2.2x the old city (was [100, 160]): hi from the 120 m start lands ~170 m up
-    towerHEnd: [150, 380], // the low end stays >= goodH: every tower is a sure anchor (was [70, 170])
-    lowH: [24, 64], // low-rises (under archetypes.TALL_MIN)
+    towerHStart: [170, 272], // 1.7x the forward-swing city ([100, 160]): hi from the 94 m start lands ~145 m up
+    towerHEnd: [120, 289], // the low end stays >= goodH: every tower is a sure anchor ([70, 170] x 1.7)
+    lowH: [20, 51], // low-rises (under archetypes.TALL_MIN)
     depth: [18, 34],
     sectionLen: [120, 320], // a stretch with buildings on both sides, or one side only
     oneSideStart: 0,
@@ -128,18 +128,18 @@ export const CFG = deepFreeze({
     offWeights: { low: 0.45, frame: 0, crane: 0.2, gap: 0.35 }, // the empty side of a one-side stretch
     setbackChance: 0.35,
     setbackInset: [4, 8],
-    setbackH: [20, 80],
+    setbackH: [17, 68],
     ledgeChance: 0.3,
     bridgeStart: 0, // chance a new tower gets a skybridge to an overlapping tower across the street (none in the easy start)
     bridgeEnd: 0.3,
-    bridgeY: [70, 150],
+    bridgeY: [51, 119],
     frameLen: [20, 40],
     frameDepth: [12, 22],
     frameH: [30, 70],
     beam: 1.6, // frame post/beam thickness: > 3 physics steps of travel at top speed, so nothing tunnels
     gapLen: [15, 45],
     craneLot: 18,
-    craneH: [84, 124], // jib height: a W web (aimUpDeg.mid) from flight height (~60 m and up) reaches it inside webRange
+    craneH: [71, 106], // jib height: a W web (aimUpDeg.mid) from flight height (~51 m and up) reaches it inside webRange
     craneReach: [20, 27], // the jib overhangs the street by this much: nearly across it, so a straight-ahead W web meets it
   },
   // game flow
@@ -149,7 +149,7 @@ export const CFG = deepFreeze({
   botReleaseClimb: 0.4, // let go past the swing bottom once climbing at 17 degrees (vel.y / speed), long before the anchor (was 0.6: held on until under the anchor, at the wall)..
   botStallSpeed: 6, // ..or once the swing has slowed below this
   botRopeMin: 20, // the bot skips ropes shorter (a wall it is next to) or longer (a slow, low swing) than these
-  botRopeMax: 180,
+  botRopeMax: 150,
   botTurnMinY: 28, // the turning bot (?autoturn) only webs a corner from at least this high..
   botTurnMaxSink: 6, // ..and falling no faster than this (m/s): a long rope from a dive bottoms out near the street
   // camera
@@ -205,8 +205,8 @@ export const CFG = deepFreeze({
     trimProud: 0.04, // m: cornices, slabs and plates stand this far off the faces they wrap (never coplanar: no z-fighting)
     decalLift: 0.035, // m: planes on a face (web splat, clock dial, signs and ads) sit this far off it
     near: 0.3, // (was 0.1: depth precision; the camera never comes closer than ~1 m to a surface)
-    far: 3400, // the 2x skyline (spires to ~700 m) stays inside the frustum
-    fogDensity: 0.0034, // exp2: ~65% hazed at the 300 m spawn horizon, opaque by ~500 m; tall tops show through the haze
+    far: 2700, // the 1.7x skyline (spires to ~560 m) stays inside the frustum
+    fogDensity: 0.0037, // exp2: ~65% hazed at the 300 m spawn horizon, opaque by ~500 m; tall tops show through the haze
     // city
     floorH: 3,
     windowColSpacing: 2.5,
