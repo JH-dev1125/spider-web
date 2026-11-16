@@ -174,7 +174,7 @@ const corridor = (g) => {
     { id: 'CL:base', kind: 'tower', attach: true, min: { x: -W - 20, y: 0, z: -50 }, max: { x: -W, y: 200, z: 3000 } },
     { id: 'CR:base', kind: 'tower', attach: true, min: { x: W, y: 0, z: -50 }, max: { x: W + 20, y: 200, z: 3000 } },
   ];
-  g.world.nextZ = { L: Infinity, R: Infinity };
+  g.world.fixed = true;
 };
 // Runs the bot (zipping or not) for up to `sec` with the camera; calls check(frame info) every frame.
 function filmBot(seed, zip, sec, setupCourse, check) {
@@ -185,7 +185,7 @@ function filmBot(seed, zip, sec, setupCourse, check) {
   for (let i = 0; i < 60 * sec && g.player.alive; i++) {
     for (const e of stepGame(g, DT, bot(g, DT))) seen.add(e);
     const p = g.player;
-    c = followCamera(p, c, DT, g.world.structures);
+    c = followCamera(p, c, DT, g.world.structures, g.street);
     check({ c, p, s: heroScreen(c, p.pos), at: `seed ${seed} zip ${zip} frame ${i}`, g });
   }
   return seen;

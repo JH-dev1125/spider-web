@@ -3,6 +3,8 @@
 // Releasing just removes the constraint, so the hero keeps exactly the velocity the swing gave it.
 import * as CANNON from '../vendor/cannon-es.js';
 import { CFG } from './config.js';
+import { makeStreet } from './street.js';
+import { ropeStep } from './rope.js';
 
 const HERO = 1, STRUCT = 2, GROUND = 4;
 
@@ -11,11 +13,12 @@ export const createPlayer = () => ({
   pos: { x: 0, y: CFG.startHeight, z: 0 },
   vel: { x: 0, y: 0, z: CFG.startSpeed },
   anchor: null,
-  ropeLen: 0,
+  ropePoints: [], // rope bends, anchor end first (see rope.js); the rope pivots on the last one
+  ropeLen: 0, // the free length: pivot to hero
   ropeMin: 0,
   swingPhase: 'none', // 'none' | 'descending' | 'ascending' (past the swing bottom)
   sawDescent: false,
-  wall: 0, // wall-running: the face's outward normal x (-1 = wall on the right, +1 = on the left), else 0
+  wall: 0, // wall-running: the face's outward normal along the street's lateral axis (world sign), else 0
   alive: true,
 });
 
@@ -37,7 +40,9 @@ export function createPhysics(p) {
   world.addBody(hero);
   const anchor = new CANNON.Body({ mass: 0, collisionFilterGroup: 0, collisionFilterMask: 0 }); // rope end point
   world.addBody(anchor);
-  const ph = { world, hero, anchor, rope: null, reelRate: 0, boxes: new Map(), acc: 0, bounced: false, zip: null, wall: null, wallCool: 0 };
+  const ph = { world, hero, anchor, rope: null, reelRate: 0, boxes: new Map(), acc: 0, bounced: false, zip: null, wall: null, wallCool: 0,
+    street: makeStreet('z', 0, 1, 0), // the street frame game.js keeps current: wall runs and roof runs go along it
+    bound: null }; // (pos, vel) => void, run after every step: game.js keeps the hero inside the street corridors
   hero.addEventListener('collide', (e) => {
     if (Math.abs(e.contact.getImpactVelocityAlongNormal()) > CFG.bounceMinSpeed) ph.bounced = true;
   });
@@ -92,6 +97,7 @@ export function attach(ph, p, point) {
   ph.reelRate = 0;
   ph.zip = null;
   p.anchor = { ...point };
+  p.ropePoints = [];
   p.ropeLen = len; // the full length: reeling starts from here, so attaching never yanks the hero
   p.ropeMin = len * CFG.reelMinFactor;
   p.swingPhase = 'descending';
@@ -106,6 +112,7 @@ export function release(ph, p) {
   ph.rope = null;
   ph.zip = null;
   p.anchor = null;
+  p.ropePoints = [];
   p.ropeLen = 0;
   p.swingPhase = 'none';
   return true;
@@ -136,57 +143,60 @@ function zipCheck(ph, p, events) {
   const d = anchor.position.vsub(hero.position), dist = d.length();
   const closing = dist > 1e-6 ? d.dot(hero.velocity) / dist : 0;
   if (closing > 1) z.closing = true;
-  if (dist < CFG.zipReleaseDist || d.z < CFG.zipReleaseDist / 2 || (z.closing && closing <= 0)) {
+  const ahead = d[ph.street.axis] * ph.street.dir; // anchor still ahead along the street by this much
+  if (dist < CFG.zipReleaseDist || ahead < CFG.zipReleaseDist / 2 || (z.closing && closing <= 0)) {
     release(ph, p); // the velocity is untouched: he flies on with all of it
     events.push('released', 'zipped');
   }
 }
 
-// Side faces (x-facing) of every structure box the hero's centre is beside: [{s, n, x}], n = outward normal x.
+// The side face (facing across the street: lateral axis a) of a structure box the hero's centre is beside:
+// {s, n}, n = outward normal along a.
 function sideFace(ph, pos, skin) {
-  const r = CFG.heroRadius + skin;
+  const r = CFG.heroRadius + skin, a = ph.street.lat, f = ph.street.axis;
   for (const { structure: s } of ph.boxes.values()) {
-    if (pos.y < s.min.y || pos.y > s.max.y || pos.z < s.min.z || pos.z > s.max.z) continue;
-    if (pos.x <= s.min.x && s.min.x - pos.x < r) return { s, n: -1, x: s.min.x };
-    if (pos.x >= s.max.x && pos.x - s.max.x < r) return { s, n: 1, x: s.max.x };
+    if (pos.y < s.min.y || pos.y > s.max.y || pos[f] < s.min[f] || pos[f] > s.max[f]) continue;
+    if (pos[a] <= s.min[a] && s.min[a] - pos[a] < r) return { s, n: -1 };
+    if (pos[a] >= s.max[a] && pos[a] - s.max[a] < r) return { s, n: 1 };
   }
   return null;
 }
 
 // Wall run after a step. v0 = the velocity before the step (the hit has already bounced it).
 function wallStep(ph, p, v0, events) {
-  const { hero } = ph, v = hero.velocity, h = CFG.physicsStep;
+  const { hero } = ph, v = hero.velocity, h = CFG.physicsStep, a = ph.street.lat, f = ph.street.axis;
   ph.wallCool = Math.max(0, ph.wallCool - h);
   const w = ph.wall;
   if (w) {
     w.sec += h;
     const still = sideFace(ph, hero.position, CFG.wallRunSkin);
     if (w.sec < CFG.wallRunSec && still && still.n === w.n) {
-      v.x = 0; // held on the face: no bounce, no drifting off
+      v[a] = 0; // held on the face: no bounce, no drifting off
       // the run speed replaces drag; the face's friction (mu * g) bleeds a little of it
       w.fwd -= Math.sign(w.fwd) * Math.min(Math.abs(w.fwd), CFG.heroFriction * CFG.gravity * h);
-      if (Math.abs(v.z) < Math.abs(w.fwd)) v.z = w.fwd;
+      if (Math.abs(v[f]) < Math.abs(w.fwd)) v[f] = w.fwd;
       return;
     }
-    const J = CFG.wallJump, f = Math.sign(w.fwd) || 1;
-    v.x += w.n * J.out; v.y = Math.max(v.y, 0) + J.up; v.z += f * J.fwd;
+    const J = CFG.wallJump, sf = Math.sign(w.fwd) || 1;
+    v[a] += w.n * J.out; v.y = Math.max(v.y, 0) + J.up; v[f] += sf * J.fwd;
     ph.wall = null; ph.wallCool = CFG.wallRunCooldownSec; p.wall = 0;
     events.push('walljump');
     return;
   }
   if (ph.wallCool > 0) return;
-  const f = sideFace(ph, hero.position, CFG.wallRunSkin);
-  if (!f || -f.n * v0.x < CFG.wallRunMinSpeed) return; // not moving into that face fast enough
-  ph.wall = { ...f, sec: 0, fwd: v0.z };
-  v.x = 0;
+  const face = sideFace(ph, hero.position, CFG.wallRunSkin);
+  if (!face || -face.n * v0[a] < CFG.wallRunMinSpeed) return; // not moving into that face fast enough
+  ph.wall = { ...face, sec: 0, fwd: v0[f] };
+  v[a] = 0;
   v.y = Math.max(v.y, -CFG.wallRunMaxSink);
-  v.z = v0.z;
-  p.wall = f.n;
+  v[f] = v0[f];
+  p.wall = face.n;
   events.push('wallrun');
 }
 
 // Advance by dt in fixed steps (leftover time carries to the next frame).
-// Events: 'bottom', 'bounce', 'dead', 'released' + 'zipped' (a zip reached its anchor), 'wallrun', 'walljump'.
+// Events: 'bottom', 'bounce', 'dead', 'released' + 'zipped' (a zip reached its anchor), 'wallrun', 'walljump',
+// 'snapped' (the rope could not wrap around what cut it and let go).
 export function stepPhysics(ph, p, dt) {
   const events = [];
   if (!p.alive) return events;
@@ -196,7 +206,7 @@ export function stepPhysics(ph, p, dt) {
     ph.acc -= h;
     const v = hero.velocity, k = CFG.airDrag * CFG.heroMass * v.length();
     hero.force.x -= k * v.x; hero.force.y -= k * v.y; hero.force.z -= k * v.z; // cleared by every step
-    const v0 = { x: v.x, y: v.y, z: v.z };
+    const v0 = { x: v.x, y: v.y, z: v.z }, P0 = { x: hero.position.x, y: hero.position.y, z: hero.position.z };
     if (ph.wall) hero.force.y += CFG.heroMass * CFG.gravity * (1 - CFG.wallRunGravity); // barely sinks on the wall
     if (ph.zip) {
       const d = ph.anchor.position.vsub(hero.position), dist = d.length();
@@ -212,6 +222,8 @@ export function stepPhysics(ph, p, dt) {
       ph.rope.distance = p.ropeLen = len;
     }
     ph.world.step(h);
+    if (ph.bound) ph.bound(hero.position, hero.velocity);
+    if (ph.rope && !ropeStep(ph, p, P0, STRUCT)) { release(ph, p); events.push('snapped'); } // can't bend around it
     if (ph.zip) zipCheck(ph, p, events);
     wallStep(ph, p, v0, events);
     if (ph.rope) {
@@ -220,7 +232,8 @@ export function stepPhysics(ph, p, dt) {
     }
     // standing on a roof with no rope: run forward so a landing never leaves the hero stuck
     p.roof = !ph.rope && hero.position.y > 1 && !!raycast(ph, hero.position, DOWN, CFG.heroRadius + 0.15);
-    if (p.roof) v.z = Math.max(v.z, CFG.roofRunSpeed);
+    const { axis: fa, dir: fd } = ph.street;
+    if (p.roof) v[fa] = fd * Math.max(fd * v[fa], CFG.roofRunSpeed); // along the street
     if (hero.position.y <= CFG.heroRadius + 0.05) { // touching the street
       release(ph, p);
       ph.wall = null; p.wall = 0;

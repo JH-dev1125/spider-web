@@ -5,8 +5,9 @@
 // set3() / the -z writes below.
 import * as THREE from 'three';
 import { CFG } from './config.js';
-import { hash01 } from './world.js';
+import { hash01, lineAt, lineIndex } from './world.js';
 import { followCamera, shakeOffset, speedLineK, wrapZ, surfaceNormal } from './render-math.js';
+import { toLocal, yawOf } from './street.js';
 import { createHero } from './character.js';
 
 const R = CFG.render;
@@ -214,13 +215,11 @@ export function createRenderer(canvas) {
   const skyTints = R.skylineTints.map(srgb);
   const writeInfo = (attr, i, color, seed) => attr.setXYZW(i, color.r, color.g, color.b, seed);
 
-  // skyline: world-fixed boxes that wrap around the camera z (pop-in happens deep in the fog)
+  // skyline: world-fixed back buildings that wrap around the camera in x and z (pop-in happens deep in the fog), each
+  // squeezed into the middle of the city block it lands in, behind the street lots: never on a street
   const SKY = Array.from({ length: R.skylineCount }, (_, i) => {
     const h = (k) => hash01(i * 7 + k + 9001);
-    const side = h(0) < 0.5 ? -1 : 1;
-    const xx = R.skylineXMin + (R.skylineXMax - R.skylineXMin) * h(1) ** 1.3;
-    const far = (xx - R.skylineXMin) / (R.skylineXMax - R.skylineXMin);
-    const s = { x: side * xx, z: h(2) * R.skylineSpan, w: 18 + 34 * h(3), d: 18 + 34 * h(4), h: 40 + (90 + 200 * far) * h(5) };
+    const s = { x: h(1) * R.skylineSpan, z: h(2) * R.skylineSpan, w: 18 + 34 * h(3), d: 18 + 34 * h(4), h: 40 + 290 * h(5) * h(0) };
     writeInfo(skylineInfo, i, skyTints[i % skyTints.length], Math.floor(h(6) * 3) + h(7) * 0.99);
     return s;
   });
@@ -282,18 +281,23 @@ export function createRenderer(canvas) {
       add('steel', x, b.y - 0.12, z, dx + 0.12, 0.12, dz + 0.12);
     } else {
       solid();
-      const face = x < 0 ? b.x : a.x, sd = x < 0 ? 1 : -1;
+      // the face on the street: s.face ('+x' | '-x' | '+z' | '-z', the outward normal), else the one facing x = 0
+      const fz = s.face?.[1] === 'z', sd = s.face ? (s.face[0] === '+' ? 1 : -1) : (x < 0 ? 1 : -1);
+      const face = fz ? (sd > 0 ? b.z : a.z) : (sd > 0 ? b.x : a.x), [u0, u1] = fz ? [a.x, b.x] : [a.z, b.z];
+      // a part `out` metres out from the face, centred at u along it (sizes: so out, sy up, su along)
+      const put = (batch, out, yy, u, so, sy, su) => (fz ? add(batch, u, yy, -(face + sd * out), su, sy, so)
+        : add(batch, face + sd * out, yy, -u, so, sy, su));
       // Thin cornices, masonry sills, and stacked balconies break up the wall silhouette.
       for (const yy of [a.y, b.y - 0.45]) add('trim', x, yy, z, dx + 0.5, 0.45, dz + 0.5);
       const style = Math.floor(h(2) * 3);
       // Keep distant facades legible without spending triangles on every small sill.
       for (let yy = a.y + 3; yy < b.y - 1; yy += close ? 3 : 6) {
-        if (style === 2) add('steel', face + sd * 0.07, yy, z, 0.14, 0.09, dz);
-        else for (let zz = a.z + 1.25; zz < b.z - 1; zz += close ? 2.5 : 5) {
-          add('trim', face + sd * 0.15, yy, -zz, 0.35, 0.12, 1.7);
-          if (style === 1 && Math.floor((zz - a.z) / 2.5) % 4 === 1 && yy % 9 < 3) {
-            add('trim', face + sd * 0.3, yy - 0.12, -zz, 0.7, 0.16, 2.1);
-            add('steel', face + sd * 0.65, yy, -zz, 0.08, 0.65, 2.1);
+        if (style === 2) put('steel', 0.07, yy, (u0 + u1) / 2, 0.14, 0.09, u1 - u0);
+        else for (let zz = u0 + 1.25; zz < u1 - 1; zz += close ? 2.5 : 5) {
+          put('trim', 0.15, yy, zz, 0.35, 0.12, 1.7);
+          if (style === 1 && Math.floor((zz - u0) / 2.5) % 4 === 1 && yy % 9 < 3) {
+            put('trim', 0.3, yy - 0.12, zz, 0.7, 0.16, 2.1);
+            put('steel', 0.65, yy, zz, 0.08, 0.65, 2.1);
           }
         }
       }
@@ -322,13 +326,13 @@ export function createRenderer(canvas) {
   }
   let upperIds = new Set();
   const listHasUpper = s => s.kind === 'tower' && upperIds.has(s.id.split(':')[0]);
-  function syncStructures(list, heroZ) {
+  function syncStructures(list, pos) {
     const ids = new Set(list.map(s => s.id));
     let changed = false;
     for (const id of records.keys()) if (!ids.has(id)) { records.delete(id); changed = true; }
     upperIds = new Set(list.filter(s => s.kind === 'setback').map(s => s.id.split(':')[0]));
     for (const s of list) {
-      const close = s.max.z > heroZ - 20 && s.min.z < heroZ + 100;
+      const close = s.max.z > pos.z - 100 && s.min.z < pos.z + 100 && s.max.x > pos.x - 100 && s.min.x < pos.x + 100;
       const signature = `${s.kind}|${s.min.x},${s.min.y},${s.min.z}|${s.max.x},${s.max.y},${s.max.z}|${s.attach}|${listHasUpper(s)}|${close}`;
       if (records.get(s.id)?.signature === signature) continue;
       records.set(s.id, { signature, parts: describe(s, close) }); changed = true;
@@ -372,6 +376,15 @@ export function createRenderer(canvas) {
   for (let i = 0; i < nLamps; i++) glow.setColorAt(i, lampColor);
   for (let i = nLamps; i < nGlow; i++) glow.setColorAt(i, (i - nLamps) % 4 < 2 ? headColor : tailColor);
   glow.count = nGlow;
+  // Street furniture is laid out along the current street (x across it, -z ahead, as on the start street); these
+  // meshes are then placed on that street (rotated to its heading, moved to its centreline). camZ: along it.
+  const decor = [glow, cars, cabins, wheels, signs, poles, markings];
+  function placeStreet(st) {
+    for (const m of decor) {
+      m.rotation.y = -yawOf(st);
+      m.position.set(st.axis === 'z' ? st.centre : 0, 0, st.axis === 'z' ? 0 : -st.centre);
+    }
+  }
   function syncStreet(camZ, t) {
     let i = 0, vehicle = 0, wheel = 0, sign = 0, mark = 0;
     const back = R.streetSpan * 0.3;
@@ -422,6 +435,9 @@ export function createRenderer(canvas) {
     return m;
   };
   const rope = strand(1), flight = strand(1), flightGlow = strand(0.17), miss = strand(0.8);
+  // a rope wrapped round corners is a polyline: hand -> bends (player.ropePoints, last first) -> anchor
+  const ropes = [rope, ...Array.from({ length: CFG.ropeMaxWraps }, () => strand(1))];
+  const vBends = ropes.map(() => new THREE.Vector3()), vPivot = new THREE.Vector3();
   flightGlow.material.blending = THREE.AdditiveBlending; flightGlow.material.depthWrite = false;
   const tip = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 6), new THREE.MeshBasicMaterial({ color: '#f1fbff' }));
   const flash = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 6),
@@ -469,7 +485,8 @@ export function createRenderer(canvas) {
   function render(view, dt) {
     const p = view.player;
     const web = view.web ?? null;
-    cam = followCamera(p, cam, dt, view.structures);
+    const st = view.street ?? { axis: 'z', lat: 'x', dir: 1, centre: 0 };
+    cam = followCamera(p, cam, dt, view.structures, st);
     const [sx, sy] = shakeOffset(view.shake || 0, view.t);
     camera.position.set(cam.x, cam.y, -cam.z);
     camera.lookAt(cam.lx, cam.ly, -cam.lz);
@@ -478,21 +495,31 @@ export function createRenderer(canvas) {
     sky.position.copy(camera.position);
     street.position.set(camera.position.x, 0, camera.position.z);
 
-    syncStructures(view.structures, p.pos.z);
+    syncStructures(view.structures, p.pos);
+    const seed = view.seed ?? 1, W = CFG.corridorHalfWidth, back = CFG.cornerDepth[1], half = R.skylineSpan / 2;
     for (let i = 0; i < SKY.length; i++) {
-      const s = SKY[i];
-      setST(skyline, i, s.x, 0, -wrapZ(s.z, cam.z, R.skylineBack, R.skylineSpan), s.w, s.h, s.d);
+      const s = SKY[i], x = wrapZ(s.x, cam.x, half, R.skylineSpan), z = wrapZ(s.z, cam.z, half, R.skylineSpan);
+      const ci = lineIndex(seed, 'col', x), ri = lineIndex(seed, 'row', z);
+      const x0 = lineAt(seed, 'col', ci) + W + back, x1 = lineAt(seed, 'col', ci + 1) - W - back;
+      const z0 = lineAt(seed, 'row', ri) + W + back, z1 = lineAt(seed, 'row', ri + 1) - W - back;
+      const w = Math.min(s.w, x1 - x0), d = Math.min(s.d, z1 - z0), k = w > 4 && d > 4 ? 1 : 0;
+      const cx = Math.min(Math.max(x, x0 + w / 2), x1 - w / 2), cz = Math.min(Math.max(z, z0 + d / 2), z1 - d / 2);
+      setST(skyline, i, cx, 0, -cz, w * k, s.h * k, d * k);
     }
     skyline.instanceMatrix.needsUpdate = true;
-    syncStreet(cam.z, view.t);
+    placeStreet(st);
+    syncStreet(toLocal(st, cam).z, view.t);
 
     // hero first: the rope, web and miss line leave its hand
     set3(vPos, p.pos); set3(vVel, p.vel);
     const anchor = p.anchor ? set3(vAnchor, p.anchor) : null;
     const aimAt = web ? set3(vAim, web.to) : view.missLine ? set3(vAim, view.missLine.to) : null;
-    hero.update(view.pose, view.t, dt, vPos, vVel, anchor, aimAt, vHand, p.wall || (view.pose === 'wallrun' ? -1 : 0)); // ?debugPose=wallrun: a right wall
+    const bends = p.ropePoints ?? [];
+    const pivot = bends.length ? set3(vPivot, bends[bends.length - 1]) : anchor; // the arm points along the rope
+    hero.update(view.pose, view.t, dt, vPos, vVel, pivot, aimAt, vHand, p.wall || (view.pose === 'wallrun' ? -1 : 0)); // ?debugPose=wallrun: a right wall
 
-    rope.visible = splat.visible = !!anchor;
+    splat.visible = !!anchor;
+    for (const m of ropes) m.visible = false;
     const key = p.anchor ? `${p.anchor.x},${p.anchor.y},${p.anchor.z}` : '';
     if (key !== anchorKey) {
       anchorKey = key;
@@ -504,7 +531,9 @@ export function createRenderer(canvas) {
       }
     }
     if (anchor) {
-      segment(rope, vHand, anchor);
+      let from = vHand, n = 0;
+      for (let k = bends.length - 1; k >= 0; k--, n++) { const v = set3(vBends[n], bends[k]); segment(ropes[n], from, v); from = v; }
+      segment(ropes[n], from, anchor);
       splat.position.copy(anchor).addScaledVector(normal, 0.035);
     }
     flashAge += dt;
