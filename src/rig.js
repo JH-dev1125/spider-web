@@ -50,7 +50,9 @@ export function syncRig(rig, structures) {
 }
 
 // Setup only: carry the whole rig rigidly so the pelvis sits at pos, turned by yaw, every body moving at vel.
-export function placeRig(ph, pos, vel, yaw = 0) {
+export function placeRig(ph, p, pos, vel, yaw = 0) {
+  ph.rig.lift.copy(liftTarget(ph, p)); // (standing on a roof: the soles on it, not inside it)
+  pos = { x: pos.x + ph.rig.lift.x, y: pos.y + ph.rig.lift.y, z: pos.z + ph.rig.lift.z };
   const o = ph.rag.bodies.pelvis.position.clone(), turn = new C.Quaternion().setFromEuler(0, yaw, 0);
   for (const b of Object.values(ph.rag.bodies)) {
     const r = turn.vmult(b.position.vsub(o));
@@ -58,7 +60,6 @@ export function placeRig(ph, pos, vel, yaw = 0) {
     turn.mult(b.quaternion, b.quaternion);
     b.velocity.set(vel.x, vel.y, vel.z); b.angularVelocity.setZero();
   }
-  ph.rig.lift.setZero();
 }
 
 // A whole-body angular impulse J about the centre of mass (adds no linear momentum): the tricks' spins.

@@ -66,8 +66,8 @@ export function createGame(seed, { start = 'air', rig = true } = {}) {
   syncStructures(g.phys, g.world.structures);
   if (start === 'roof') {
     const top = g.world.start.max.y, edge = g.world.start.max.z;
-    placeHero(g.phys, player, { x: 0, y: top + CFG.heroRadius, z: edge - .35 }, { x: 0, y: 0, z: 0 }, 0); // toes at the edge
     player.headingYaw = 0; g.phys.startPhase = player.phase = 'idle'; g.pose = 'idle';
+    placeHero(g.phys, player, { x: 0, y: top + CFG.heroRadius, z: edge - .35 }, { x: 0, y: 0, z: 0 }, 0); // toes at the edge
     startMove(g.phys, MOVES.roofIdle, travelBasis(player));
   }
   return g;

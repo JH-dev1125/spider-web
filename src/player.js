@@ -75,7 +75,7 @@ export function createPhysics(p, { rig = true, seed = 1 } = {}) {
 export function placeHero(ph, p, pos, vel = { x: 0, y: 0, z: 0 }, yaw = 0) {
   ph.hero.position.set(pos.x, pos.y, pos.z); ph.hero.previousPosition.copy(ph.hero.position);
   ph.hero.velocity.set(vel.x, vel.y, vel.z); ph.prevVel.copy(ph.hero.velocity);
-  if (ph.rig) placeRig(ph, pos, vel, yaw);
+  if (ph.rig) placeRig(ph, p, pos, vel, yaw);
   copy(ph.hero.position, p.pos); copy(ph.hero.velocity, p.vel);
 }
 
