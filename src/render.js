@@ -120,7 +120,8 @@ function skyMaterial(sunDir, fogColor) {
       #include <common>
       #include <logdepthbuf_pars_vertex>
       void main() { vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        #include <logdepthbuf_vertex> }`,
+        #include <logdepthbuf_vertex>
+      }`,
     fragmentShader: `uniform vec3 top; uniform vec3 mid; uniform vec3 horizon; uniform vec3 fogc; uniform vec3 sunDir; varying vec3 vDir;
       #include <common>
       #include <logdepthbuf_pars_fragment>
@@ -430,9 +431,9 @@ export function createRenderer(canvas) {
   glow.count = nGlow;
   // Street furniture is laid out along the current street (x across it, -z ahead, as on the start street); these
   // meshes are then placed on that street (rotated to its heading, moved to its centreline). camZ: along it.
-  const decor = [glow, cars, cabins, wheels, signs, poles, markings];
+  const furniture = [glow, cars, cabins, wheels, signs, poles, markings];
   function placeStreet(st) {
-    for (const m of decor) {
+    for (const m of furniture) {
       m.rotation.y = -yawOf(st);
       m.position.set(st.axis === 'z' ? st.centre : 0, 0, st.axis === 'z' ? 0 : -st.centre);
     }

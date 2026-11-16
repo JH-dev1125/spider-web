@@ -14,6 +14,7 @@ import { createRenderer } from '../src/render.js';
 import { makeRng } from '../src/world.js';
 import { buildBuilding, streetLot } from '../src/archetypes.js';
 import { CFG } from '../src/config.js';
+import { createPlayer, createPhysics, placeHero } from '../src/player.js';
 
 const W = CFG.corridorHalfWidth;
 const shot = new URLSearchParams(location.search).get('shot') || 'skyline';
@@ -54,7 +55,10 @@ if (shot === 'skyline') {
 }
 const renderer = createRenderer(document.getElementById('gl'));
 renderer.resize(innerWidth, innerHeight, devicePixelRatio || 1);
-const player = { pos, vel, anchor, ropeLen: anchor ? Math.hypot(anchor.y - pos.y, anchor.z - pos.z) : 0, alive: true, wall: 0 };
+// the hero is the ragdoll (character.js skins its bodies): a physics rig placed at pos, not stepped
+const player = createPlayer(), ph = createPhysics(player);
+placeHero(ph, player, pos, vel);
+Object.assign(player, { anchor, ropeLen: anchor ? Math.hypot(anchor.y - pos.y, anchor.z - pos.z) : 0 });
 let t = 20;
 const frame = () => {
   t += 1 / 60;

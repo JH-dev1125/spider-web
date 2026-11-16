@@ -186,6 +186,7 @@ function update(dt) {
   if (palmSec >= CFG.handRestartSec) { palmSec = 0; start(); }
   if (mode === 'title') { stepGame(g, dt, []); return; } // he idles on the roof under the title
   if (bot && g.elapsed < botSec) actions.push(...bot(g, dt));
+  else if (bot) { actions.push({ type: 'release' }); bot = null; } // ?autoplay=<sec>: then let go and fall (the landing)
   const events = stepGame(g, dt, actions);
   actions = [];
   if (mode === 'play' && events.includes('dead')) {
@@ -218,8 +219,7 @@ function frame() {
     title: mode === 'title',
   }, dt);
   ctx.clearRect(0, 0, w, h);
-  drawHud();
-  drawHandStatus();
+  if (!q.has('nohud')) { drawHud(); drawHandStatus(); } // ?nohud: the bare scene (screenshots)
   requestAnimationFrame(frame);
 }
 if (autoplay) {
