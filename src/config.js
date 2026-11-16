@@ -15,7 +15,18 @@ export const CFG = deepFreeze({
   heroRestitution: 0.2,
   bounceMinSpeed: 4, // m/s impact speed along the contact normal that counts as a 'bounce' (camera shake)
   corridorHalfWidth: 14, // tower faces line x = +-14 (the street corridor)
-  viewDistance: 260, // structures exist this far ahead of the hero
+  viewDistance: 260, // structures exist this far ahead of the hero (along the current street)
+  // city grid (world.js): streets along z (at x = colX(i)) and along x (at z = rowZ(j)), corridorHalfWidth wide
+  blockLen: 160, // mean distance between intersections..
+  blockJitter: 20, // ..each street line moved by up to this, so neighbouring lines are 120-200 m apart
+  rowOffset: 120, // row 0 sits 100-140 m ahead of the start (row -1 ends behind it): the hero starts mid-block
+  cornerDepth: [34, 42], // every block corner holds a tall solid tower this many metres along each street (>= level.depth max,
+  // so lots of the two streets meeting at a corner never overlap behind it)
+  streetMargin: 1, // m: the hero's centre may leave the street corridors by this much (over a roof edge), no more
+  crossIntersections: 2, // cross streets are built at this many intersections ahead
+  turnShare: 0.6, // inside an intersection, horizontal velocity more than this along the cross street = turned
+  turnInset: 3, // m: ..counted only this far inside the intersection square (at its edge he'd turn into the corner tower)
+  turnReach: 14, // bot: a turning web lands at most this far short of the corner's edge
   behindDistance: 40, // and are removed this far behind
   startHeight: 55,
   startSpeed: 12, // m/s forward at the start: a gentle leap, not a launch
@@ -26,6 +37,7 @@ export const CFG = deepFreeze({
   // forward momentum and the pendulum's low point (under the anchor, at the wall) is never reached before the release.
   // From the centre (42.4 m out to the face): hi rises 50 m (rope 12 deg out of the forward-vertical plane),
   // mid 30 m (15 deg), lo 12 m (19 deg). (Was 52 m ahead, hi +13 m, mid level, lo -31 m: every swing ran into the wall.)
+  aimPastCross: 6, // m: when that point is in an intersection, webs go this far past it instead (the far corner tower)
   aimPitchDeg: { hi: 49.7, mid: 35.3, lo: 15.8 },
   // body English while on the rope: the swinger leans and pulls to turn the swing plane toward the street heading
   steer: {
@@ -53,6 +65,8 @@ export const CFG = deepFreeze({
   ropeMaxForce: 1e5, // N, the rope's tension limit (an 80 kg hero at 40 m/s on a 30 m rope needs ~5 kN)
   ropeStiffness: 1e8, // cannon SPOOK constraint parameters for the rope
   ropeRelaxation: 2, // steps to correct a stretch: lower is stiffer (>= 1 stays stable)
+  ropeWrapOffset: 0.08, // m: a wrap point sits this far outside the box edge it bends around
+  ropeMaxWraps: 4, // more bends than this (or one that can't be placed) snaps the rope
   missShowSec: 0.25,
   // level generator (world.js); z is distance along the course
   level: {
@@ -100,11 +114,15 @@ export const CFG = deepFreeze({
   botStallSpeed: 6, // ..or once the swing has slowed below this
   botRopeMin: 20, // the bot skips ropes shorter (a wall it is next to) or longer (a slow, low swing) than these
   botRopeMax: 120,
+  botTurnMinY: 28, // the turning bot (?autoturn) only webs a corner from at least this high..
+  botTurnMaxSink: 6, // ..and falling no faster than this (m/s): a long rope from a dive bottoms out near the street
   // camera
   camNear: 0.5,
   camBack: 8.5,
   camUp: 2.2,
   camFollow: 12, // 1/s, exponential smoothing rate (every axis also leads by vel / camFollow, so no steady lag)
+  camTurnFollow: 6, // 1/s, the camera's yaw eases toward the street heading..
+  camTurnRate: 120, // ..no faster than this many degrees per second
   camLeash: 1.25, // the camera is never farther from the hero than this x its desired offset (hero >= ~1/5 of the screen)
   fovMin: 62,
   fovMax: 92,

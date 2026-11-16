@@ -1,5 +1,6 @@
 ﻿import * as C from '../vendor/cannon-es.js';
 import { CFG } from './config.js';
+import { yawOf, right } from './street.js';
 
 // Rest centres in metres, pelvis origin, +y head-up, +z chest/forward. Shared by physics and skin.
 export const ANATOMY = [
@@ -89,19 +90,24 @@ export function driveRagdoll(ph, p, h) {
   r.time += h;
   r.modeTime = r.mode === p.mode ? (r.modeTime || 0) + h : 0; r.mode = p.mode;
   if (!p.alive) return; // death keeps anatomical limits, removes every muscle
-  const basis = new C.Quaternion();
+  // Every pose is authored facing +z; `yaw` turns it to face down the current street (street.js).
+  const st = ph.street, yaw = new C.Quaternion(), basis = new C.Quaternion();
+  if (st) yaw.setFromAxisAngle(UP, yawOf(st));
   if (ph.wall) {
-    basis.setFromAxisAngle(new C.Vec3(0, 0, 1), -ph.wall.n * Math.PI / 2);
+    const rt = st ? right(st) : { x: 1, z: 0 }, n = ph.wall.n * (st ? rt[st.lat] : 1); // the face normal, body-local x
+    basis.setFromAxisAngle(new C.Vec3(0, 0, 1), -n * Math.PI / 2);
     const balance = new C.Quaternion(); balance.setFromEuler(-.3, 0, 0); basis.mult(balance, basis);
   }
   else if (!p.roof && p.anchor) {
     const d = ph.anchor.position.vsub(b.pelvis.position); d.normalize();
-    const up = new C.Vec3(d.x * .4, Math.max(.6, d.y), d.z * .35); up.normalize(); basis.setFromVectors(UP, up);
+    const up = new C.Vec3(d.x * .4, Math.max(.6, d.y), d.z * .4); up.normalize();
+    const tilt = new C.Quaternion(); tilt.setFromVectors(UP, up); tilt.mult(yaw, basis); // yaw first, then lean up the rope
   }
   if (!ph.wall && !p.roof && !p.anchor) {
     if (p.mode === 'roll') basis.setFromAxisAngle(new C.Vec3(0, 0, 1), r.modeTime * Math.PI * 2 / CFG.trickSec);
     else if (p.mode === 'glide') basis.setFromEuler(.35, 0, 0);
   }
+  if (ph.wall || p.roof || !p.anchor) yaw.mult(basis, basis);
   for (const a of ANATOMY) t[a.name].copy(basis);
   for (const side of ['L', 'R']) {
     const sd = side === 'L' ? -1 : 1;

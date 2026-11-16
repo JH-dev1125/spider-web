@@ -24,7 +24,7 @@ const tower = (id, sd, z0, z1, h) => block(`${id}:base`, 'tower',
 // ('L0:base'...): physics boxes are keyed by id.
 function course(g, structures) {
   g.world.structures = structures;
-  g.world.nextZ = { L: Infinity, R: Infinity };
+  g.world.fixed = true;
 }
 const walls = (g, h = 200) => course(g, [tower('WL', -1, -50, 2000, h), tower('WR', 1, -50, 2000, h)]);
 // Keep holding while the web is in flight (it lands after dist / webSpeed).

@@ -34,7 +34,8 @@ window.addEventListener('resize', resize);
 resize();
 
 // Debug: ?autoplay starts at once with the bot; ?autoplay=<sec> stops the bot after <sec> so it dies;
-// ?t=<sec> fast-forwards (see the bottom); ?autozip makes the bot zip up its ropes.
+// ?t=<sec> fast-forwards (see the bottom); ?autozip makes the bot zip up its ropes; ?autoturn[=L|R|alt] makes it
+// turn at every intersection (alt: right, then left, ...); ?seed=<n> fixes the city.
 const q = new URLSearchParams(location.search);
 const autoplay = q.has('autoplay');
 const botSec = Number(q.get('autoplay')) || Infinity;
@@ -46,7 +47,8 @@ const tracker = createChargeTracker();
 const now = () => performance.now() / 1000;
 
 let mode = 'title'; // 'title' | 'play' | 'over'
-let g = createGame(Date.now());
+const seedOf = () => Number(q.get('seed')) || Date.now(); // ?seed=<n>: a fixed city (screenshots)
+let g = createGame(seedOf());
 let actions = []; // input queue for stepGame: {type:'press'|'release'|'zip'|'zipEnd', ...}
 let overSec = 0;
 let result = null;
@@ -78,10 +80,10 @@ window.addEventListener('keydown', (e) => {
 });
 
 function start() {
-  g = createGame(Number(q.get('seed')) || Date.now());
+  g = createGame(seedOf());
   actions = [];
   tracker.cancel(); // a key held through death must not release anything on the first frame
-  bot = autoplay ? createBot({ zip: q.has('autozip') }) : null;
+  bot = autoplay ? createBot({ zip: q.has('autozip'), turn: q.has('autoturn') ? q.get('autoturn') || 'alt' : null }) : null;
   mode = 'play';
 }
 
@@ -113,7 +115,7 @@ function drawHud() {
     ctx.font = `bold ${H.hudPx}px ${H.font}`;
     ctx.fillStyle = H.color;
     ctx.textAlign = 'center';
-    ctx.fillText(`${mode === 'over' ? result.distance : Math.floor(g.player.pos.z)} m`, w * 0.5, H.margin);
+    ctx.fillText(`${mode === 'over' ? result.distance : Math.max(0, Math.floor(g.distance))} m`, w * 0.5, H.margin);
     ctx.font = `${H.textPx}px ${H.font}`;
     ctx.textAlign = 'right';
     ctx.fillText(`BEST ${score.best()} m`, w - H.margin, H.margin);
@@ -184,7 +186,7 @@ function update(dt) {
     mode = 'over';
     overSec = 0;
     tracker.cancel();
-    const distance = Math.floor(g.player.pos.z);
+    const distance = Math.max(0, Math.floor(g.distance)); // metres along the streets, turns included
     result = { distance, newBest: score.submit(distance) };
   } else if (mode === 'over') overSec += dt;
 }
@@ -203,6 +205,9 @@ function frame() {
     pose: g.pose,
     t,
     shake: g.shake,
+    street: g.street,
+    distance: g.distance,
+    seed: g.world.seed,
   }, dt);
   ctx.clearRect(0, 0, w, h);
   drawHud();
