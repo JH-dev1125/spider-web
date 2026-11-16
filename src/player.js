@@ -1,8 +1,9 @@
 // Hero physics on cannon-es: a dynamic sphere, static boxes for every structure, the street as a plane,
-// and the web as a pull-only DistanceConstraint that stays taut (slack is taken up) and is reeled down smoothly.
-// Releasing just removes the constraint, so the hero keeps exactly the velocity the swing gave it.
+// and up to two webs (slot 'L' / 'R', see ropes.js): pull-only constraints that stay taut and reel down smoothly.
+// Releasing just removes a constraint, so the hero keeps exactly the velocity the swing gave it.
 import * as CANNON from '../vendor/cannon-es.js';
 import { CFG } from './config.js';
+import { createRopes } from './ropes.js';
 
 const HERO = 1, STRUCT = 2, GROUND = 4;
 
@@ -10,7 +11,8 @@ const HERO = 1, STRUCT = 2, GROUND = 4;
 export const createPlayer = () => ({
   pos: { x: 0, y: CFG.startHeight, z: 0 },
   vel: { x: 0, y: 0, z: CFG.startSpeed },
-  anchor: null,
+  anchor: null, // the most recent held rope's anchor (kept for single-rope readers)
+  ropes: [], // every held rope: [{slot, anchor, len, tension}]
   ropeLen: 0,
   ropeMin: 0,
   swingPhase: 'none', // 'none' | 'descending' | 'ascending' (past the swing bottom)
@@ -35,9 +37,7 @@ export function createPhysics(p) {
     position: new CANNON.Vec3(p.pos.x, p.pos.y, p.pos.z), velocity: new CANNON.Vec3(p.vel.x, p.vel.y, p.vel.z),
   });
   world.addBody(hero);
-  const anchor = new CANNON.Body({ mass: 0, collisionFilterGroup: 0, collisionFilterMask: 0 }); // rope end point
-  world.addBody(anchor);
-  const ph = { world, hero, anchor, rope: null, reelRate: 0, boxes: new Map(), acc: 0, bounced: false, zip: null, wall: null, wallCool: 0 };
+  const ph = { world, hero, ropes: createRopes(world), boxes: new Map(), acc: 0, bounced: false, zip: null, wall: null, wallCool: 0 };
   hero.addEventListener('collide', (e) => {
     if (Math.abs(e.contact.getImpactVelocityAlongNormal()) > CFG.bounceMinSpeed) ph.bounced = true;
   });
@@ -78,65 +78,73 @@ export function raycast(ph, from, dir, range) {
   return { point: { x: q.x, y: q.y, z: q.z }, attach: !!r.body.structure?.attach };
 }
 
-// Returns false (miss) for anchors too close to swing on. Replaces a held rope.
-export function attach(ph, p, point) {
-  const len = ph.hero.position.distanceTo(new CANNON.Vec3(point.x, point.y, point.z));
-  if (len < CFG.minRopeLen) return false;
-  if (ph.rope) ph.world.removeConstraint(ph.rope);
-  ph.anchor.position.set(point.x, point.y, point.z);
-  ph.rope = new CANNON.DistanceConstraint(ph.hero, ph.anchor, len, CFG.ropeMaxForce);
-  const eq = ph.rope.distanceEquation;
-  eq.maxForce = 0; // a rope pulls, never pushes: slack when shorter than its length
-  eq.setSpookParams(CFG.ropeStiffness, CFG.ropeRelaxation, CFG.physicsStep); // the default assumes a 1/60 s step
-  ph.world.addConstraint(ph.rope);
-  ph.reelRate = 0;
+// Copy the held ropes into the view: p.ropes, and p.anchor / ropeLen / ropeMin from the most recent one.
+function syncRopes(ph, p) {
+  const r = ph.ropes.latest();
+  p.ropes = ph.ropes.view();
+  p.anchor = r ? r.at : null;
+  p.ropeLen = r ? r.len : 0;
+  p.ropeMin = r ? r.min : 0;
+  if (!r) p.swingPhase = 'none';
+}
+
+// Attach slot's rope ('L' / 'R'). Returns false (miss) for anchors too close to swing on. Replaces that slot's rope only.
+export function attach(ph, p, point, slot = 'R') {
+  if (!ph.ropes.attach(slot, point, ph.hero)) return false;
   ph.zip = null;
-  p.anchor = { ...point };
-  p.ropeLen = len; // the full length: reeling starts from here, so attaching never yanks the hero
-  p.ropeMin = len * CFG.reelMinFactor;
   p.swingPhase = 'descending';
   p.sawDescent = false;
+  syncRopes(ph, p);
   return true;
 }
 
-// Let go: remove the constraint. Nothing touches the velocity. Returns true if a rope was attached.
-export function release(ph, p) {
-  if (!ph.rope) return false;
-  ph.world.removeConstraint(ph.rope);
-  ph.rope = null;
-  ph.zip = null;
-  p.anchor = null;
-  p.ropeLen = 0;
-  p.swingPhase = 'none';
+// Let go of one slot (every rope when slot is omitted). Nothing touches the velocity. Returns true if a rope let go.
+export function release(ph, p, slot) {
+  if (!ph.ropes.release(slot)) return false;
+  if (!ph.ropes.active().length) ph.zip = null;
+  syncRopes(ph, p);
   return true;
 }
 
 const copy = (v, o) => { o.x = v.x; o.y = v.y; o.z = v.z; };
 
-// Zip: on = start pulling toward the anchor (held Space / a hand pull), off = stop. Does nothing without a rope.
-// It starts with a snap (zipImpulse toward the anchor), then pulls as a force, so the hero is never moved by position;
+// Zip direction: the sum of the unit vectors toward every held anchor, normalised (one rope = toward its anchor),
+// plus the nearest anchor's distance and the farthest anchor's lead along z for the arrival check. null = no pull.
+function zipDir(ph) {
+  const u = new CANNON.Vec3();
+  let near = Infinity, ahead = -Infinity;
+  for (const r of ph.ropes.active()) {
+    const d = r.anchor.position.vsub(ph.hero.position), dist = d.length();
+    near = Math.min(near, dist); ahead = Math.max(ahead, d.z);
+    if (dist > 1e-6) u.vadd(d.scale(1 / dist), u);
+  }
+  const n = u.length();
+  return n > 1e-6 ? { u: u.scale(1 / n), near, ahead } : null;
+}
+
+// Zip: on = start pulling along the ropes (held Space / a hand pull), off = stop. Does nothing without a rope.
+// It starts with a snap (zipImpulse along zipDir), then pulls as a force, so the hero is never moved by position;
 // it ends by itself on release or near the anchor.
 export function setZip(ph, on) {
-  if (!on || !ph.rope) { ph.zip = null; return false; }
+  if (!on || !ph.ropes.active().length) { ph.zip = null; return false; }
   if (!ph.zip) {
     ph.zip = { closing: false };
-    const d = ph.anchor.position.vsub(ph.hero.position), dist = d.length();
-    const closing = dist > 1e-6 ? d.dot(ph.hero.velocity) / dist : 0;
+    const z = zipDir(ph);
+    const closing = z ? z.u.dot(ph.hero.velocity) : 0;
     const kick = Math.min(CFG.zipImpulse, Math.max(0, CFG.zipMaxSpeed - closing)); // the snap, never past zipMaxSpeed
-    if (dist > 1e-6) ph.hero.velocity.vadd(d.scale(kick / dist), ph.hero.velocity);
+    if (z) ph.hero.velocity.vadd(z.u.scale(kick), ph.hero.velocity);
   }
   return true;
 }
 
-// Zip after a step: arrived = let go before passing the anchor: within zipReleaseDist of it, within half that of
-// drawing level with it along z (a high anchor he would pass beneath), or moving away once closing.
-// So a zip at an anchor already beside or behind him just lets go.
+// Zip after a step: arrived = let go of every rope before passing an anchor: within zipReleaseDist of the nearest,
+// within half that of drawing level with every anchor along z (high anchors he would pass beneath), or moving away
+// once closing. So a zip at anchors already beside or behind him just lets go.
 function zipCheck(ph, p, events) {
-  const { hero, anchor } = ph, z = ph.zip;
-  const d = anchor.position.vsub(hero.position), dist = d.length();
-  const closing = dist > 1e-6 ? d.dot(hero.velocity) / dist : 0;
+  const z = ph.zip, d = zipDir(ph);
+  const closing = d ? d.u.dot(ph.hero.velocity) : 0;
   if (closing > 1) z.closing = true;
-  if (dist < CFG.zipReleaseDist || d.z < CFG.zipReleaseDist / 2 || (z.closing && closing <= 0)) {
+  if (!d || d.near < CFG.zipReleaseDist || d.ahead < CFG.zipReleaseDist / 2 || (z.closing && closing <= 0)) {
     release(ph, p); // the velocity is untouched: he flies on with all of it
     events.push('released', 'zipped');
   }
@@ -199,27 +207,20 @@ export function stepPhysics(ph, p, dt) {
     const v0 = { x: v.x, y: v.y, z: v.z };
     if (ph.wall) hero.force.y += CFG.heroMass * CFG.gravity * (1 - CFG.wallRunGravity); // barely sinks on the wall
     if (ph.zip) {
-      const d = ph.anchor.position.vsub(hero.position), dist = d.length();
-      if (dist > 1e-6 && d.dot(v) / dist < CFG.zipMaxSpeed) hero.force.vadd(d.scale(CFG.zipAccel * CFG.heroMass / dist), hero.force);
+      const z = zipDir(ph);
+      if (z && z.u.dot(v) < CFG.zipMaxSpeed) hero.force.vadd(z.u.scale(CFG.zipAccel * CFG.heroMass), hero.force);
     }
-    if (ph.rope) {
-      let len = ph.rope.distance;
-      const d = hero.position.distanceTo(ph.anchor.position);
-      // the reel spins up under tension (a sudden full-speed reel would jerk the hero), stops when slack
-      ph.reelRate = d >= len - 1e-3 ? Math.min(CFG.reelSpeed, ph.reelRate + CFG.reelAccel * h) : 0;
-      if (d < len) len = Math.max(CFG.minRopeLen, d); // take up slack (no force: it never moves the hero)
-      if (len > p.ropeMin) len = Math.max(p.ropeMin, len - ph.reelRate * h); // reel in under tension
-      ph.rope.distance = p.ropeLen = len;
-    }
+    ph.ropes.stepReel(h); // per rope: spins up under tension (a sudden full-speed reel would jerk), stops when slack
     ph.world.step(h);
     if (ph.zip) zipCheck(ph, p, events);
     wallStep(ph, p, v0, events);
-    if (ph.rope) {
+    const roped = ph.ropes.active().length > 0;
+    if (roped) {
       if (v.y <= 0) p.sawDescent = true;
       if (p.swingPhase === 'descending' && p.sawDescent && v.y > 0) { p.swingPhase = 'ascending'; events.push('bottom'); }
     }
     // standing on a roof with no rope: run forward so a landing never leaves the hero stuck
-    p.roof = !ph.rope && hero.position.y > 1 && !!raycast(ph, hero.position, DOWN, CFG.heroRadius + 0.15);
+    p.roof = !roped && hero.position.y > 1 && !!raycast(ph, hero.position, DOWN, CFG.heroRadius + 0.15);
     if (p.roof) v.z = Math.max(v.z, CFG.roofRunSpeed);
     if (hero.position.y <= CFG.heroRadius + 0.05) { // touching the street
       release(ph, p);
@@ -231,6 +232,7 @@ export function stepPhysics(ph, p, dt) {
     }
   }
   if (ph.bounced) { ph.bounced = false; events.push('bounce'); }
+  syncRopes(ph, p);
   copy(hero.position, p.pos);
   copy(hero.velocity, p.vel);
   return events;

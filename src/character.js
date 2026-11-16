@@ -187,7 +187,7 @@ export function createHero(THREE) {
   const vS = new THREE.Vector3(), vD = new THREE.Vector3(), m = new THREE.Matrix4();
   const DOWN = new THREE.Vector3(0, -1, 0), UP = new THREE.Vector3(0, 1, 0), FWD = new THREE.Vector3(0, 0, -1);
   const AX_X = new THREE.Vector3(1, 0, 0), AX_Z = new THREE.Vector3(0, 0, 1);
-  let pose = null, poseSec = 0, mirror = false, ikW = 0, first = true;
+  let pose = null, poseSec = 0, mirror = false, ikW = 0, ikW2 = 0, first = true;
 
   // basis: rig +y along u, chest (+z) toward f (orthogonalised against u)
   function aimBasis(u, f, out) {
@@ -202,7 +202,8 @@ export function createHero(THREE) {
 
   // pos/vel/anchor/aimAt are three.js coords (Vector3); aimAt = where the web arm points, or null.
   // wall = player.wall (the run's face normal x, 0 when not wall-running).
-  function update(poseName, t, dt, pos, vel, anchor, aimAt, out, wall = 0) {
+  // other = a second rope's anchor (two ropes held) or null: the free arm reaches for it and outOther gets that hand.
+  function update(poseName, t, dt, pos, vel, anchor, aimAt, out, wall = 0, other = null, outOther = null) {
     if (poseName !== pose) { pose = poseName; poseSec = 0; } else poseSec += dt;
     const aim = anchor || aimAt;
     if (aim) mirror = aim.x < pos.x;
@@ -237,6 +238,19 @@ export function createHero(THREE) {
       (mirror ? J.elL : J.elR).rotation.set(0, 0, 0);
       sh.updateMatrixWorld(true);
     }
+    // the same for the free arm on a second rope
+    ikW2 += ((other ? 1 : 0) - ikW2) * (first ? 1 : 1 - Math.exp(-K.blendRate * dt));
+    const sh2 = mirror ? J.shR : J.shL;
+    if (other && ikW2 > 0.01) {
+      sh2.getWorldPosition(vS);
+      J.spine.getWorldQuaternion(qPar).invert();
+      vD.subVectors(other, vS).applyQuaternion(qPar).normalize();
+      qAim.setFromUnitVectors(DOWN, vD);
+      sh2.quaternion.slerp(qAim, ikW2);
+      (mirror ? J.elR : J.elL).rotation.set(0, 0, 0);
+      sh2.updateMatrixWorld(true);
+    }
+    if (outOther) (mirror ? J.handR : J.handL).getWorldPosition(outOther);
     first = false;
     return (mirror ? J.handL : J.handR).getWorldPosition(out);
   }

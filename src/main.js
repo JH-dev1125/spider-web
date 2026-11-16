@@ -32,7 +32,7 @@ window.addEventListener('resize', resize);
 resize();
 
 // Debug: ?autoplay starts at once with the bot; ?autoplay=<sec> stops the bot after <sec> so it dies;
-// ?t=<sec> fast-forwards (see the bottom); ?autozip makes the bot zip up its ropes.
+// ?t=<sec> fast-forwards (see the bottom); ?autozip makes the bot zip up its ropes; ?dualrope makes it hold two.
 const q = new URLSearchParams(location.search);
 const autoplay = q.has('autoplay');
 const botSec = Number(q.get('autoplay')) || Infinity;
@@ -79,7 +79,7 @@ function start() {
   g = createGame(Date.now());
   actions = [];
   tracker.cancel(); // a key held through death must not release anything on the first frame
-  bot = autoplay ? createBot({ zip: q.has('autozip') }) : null;
+  bot = autoplay ? createBot({ zip: q.has('autozip'), dual: q.has('dualrope') }) : null;
   mode = 'play';
 }
 
@@ -125,6 +125,7 @@ function drawHud() {
       ['WEB RUNNER', H.titlePx, H.color, true],
       ['왼쪽 Q · A · Z   /   오른쪽 E · D · C   (위 · 가운데 · 아래)', H.textPx, H.color],
       ['누르면 즉시 거미줄 → 누르고 있는 동안 스윙 → 떼면 날아감', H.textPx, H.color],
+      ['Q와 E를 함께 누르면 줄 두 개 · 한쪽만 떼면 그 줄만 풀림', H.textPx, H.color],
       ['줄이 붙은 채 Space: 줄 당기기 (앵커에 가까워지면 저절로 놓고 날아감)', H.textPx, H.color],
       coarse ? ['PC(키보드/웹캠)에서 열어주세요', H.hudPx, H.accent, true] : ['Space: 키보드로 시작', H.hudPx, H.accent, true],
       ['바닥에 닿으면 끝 · 너무 오래 잡고 있으면 뒤로 되돌아가요', H.textPx, H.color],

@@ -163,17 +163,168 @@ test('a release with no rope does nothing', () => {
   assert.equal(g.pose, 'glide');
 });
 
-test('a new press while attached replaces the rope (last pressed wins)', () => {
+test('a new press on the held side replaces that rope (the old one holds while the new web flies)', () => {
   const g = createGame(1);
   walls(g);
   stepGame(g, DT, [shot('R', 'hi')]);
   fly(g);
   const a = g.player.anchor;
-  stepGame(g, DT, [shot('L', 'hi')]);
+  stepGame(g, DT, [shot('R', 'lo')]);
   assert.deepEqual(g.player.anchor, a); // the old rope holds while the new web flies
   fly(g);
-  assert.ok(g.player.anchor && g.player.anchor.x < 0 && a.x > 0);
+  assert.ok(g.player.anchor && g.player.anchor !== a && g.player.anchor.y < a.y);
   assert.equal(g.phys.world.constraints.length, 1);
+  assert.deepEqual(g.player.ropes.map((r) => r.slot), ['R']);
+});
+
+// ---- two ropes at once: Q (slot L) and E (slot R) held together ----
+const REL_L = { type: 'release', side: 'L' }, REL_R = { type: 'release', side: 'R' };
+const both = (seed = 1) => {
+  const g = createGame(seed);
+  walls(g);
+  stepGame(g, DT, [shot('L', 'hi'), shot('R', 'hi')]);
+  fly(g);
+  return g;
+};
+const slots = (g) => g.player.ropes.map((r) => r.slot).sort().join('');
+
+test('dual: Q and E held together attach two ropes; both constraints are in the world and both pull', () => {
+  const g = both();
+  assert.equal(slots(g), 'LR');
+  assert.equal(g.phys.world.constraints.length, 2);
+  const [l, r] = ['L', 'R'].map((s) => g.player.ropes.find((x) => x.slot === s));
+  assert.ok(l.anchor.x < 0 && r.anchor.x > 0, 'L on the left wall, R on the right');
+  assert.equal(g.pose, 'swing');
+  let tl = 0, tr = 0;
+  for (let i = 0; i < 90; i++) {
+    stepGame(g, DT, []);
+    tl = Math.max(tl, g.phys.ropes.tension('L')); tr = Math.max(tr, g.phys.ropes.tension('R'));
+  }
+  assert.ok(tl > 1 && tr > 1, `both ropes carry tension: L ${tl.toFixed(1)} N, R ${tr.toFixed(1)} N`);
+  assert.equal(g.player.ropes.find((x) => x.slot === 'L').tension, g.phys.ropes.tension('L'));
+});
+
+test('dual: the swing on two ropes differs from either single rope', () => {
+  const run = (acts) => {
+    const g = createGame(1);
+    walls(g);
+    stepGame(g, DT, acts);
+    for (let i = 0; i < 120; i++) stepGame(g, DT, []);
+    return { ...g.player.pos };
+  };
+  const L = run([shot('L', 'hi')]), R = run([shot('R', 'hi')]), LR = run([shot('L', 'hi'), shot('R', 'hi')]);
+  const d = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+  assert.ok(d(LR, L) > 0.5 && d(LR, R) > 0.5, `LR ${JSON.stringify(LR)} vs L ${JSON.stringify(L)} / R ${JSON.stringify(R)}`);
+  assert.ok(Math.abs(LR.x) < Math.abs(L.x) && Math.abs(LR.x) < Math.abs(R.x), 'pulled by both walls: stays nearer the middle');
+});
+
+test('dual: releasing Q keeps the E rope; releasing E then clears both', () => {
+  const g = both();
+  for (let i = 0; i < 30; i++) stepGame(g, DT, []);
+  const ev = stepGame(g, DT, [REL_L]);
+  assert.ok(ev.includes('released'));
+  assert.equal(slots(g), 'R');
+  assert.equal(g.phys.world.constraints.length, 1);
+  assert.ok(g.player.anchor.x > 0, 'anchor = the rope still held');
+  assert.equal(g.pose, 'swing');
+  stepGame(g, DT, [REL_R]);
+  assert.equal(slots(g), '');
+  assert.equal(g.phys.world.constraints.length, 0);
+  assert.equal(g.player.anchor, null);
+});
+
+test('dual: releasing both together clears both; blur (release without a side) clears both', () => {
+  const g = both();
+  stepGame(g, DT, [REL_L, REL_R]);
+  assert.equal(g.phys.world.constraints.length, 0);
+  assert.equal(slots(g), '');
+  const h = both();
+  stepGame(h, DT, [REL]);
+  assert.equal(h.phys.world.constraints.length, 0);
+  assert.equal(h.player.anchor, null);
+});
+
+test('dual: each release keeps the momentum (the velocity is untouched by letting go)', async () => {
+  const { release } = await import('../src/player.js');
+  const g = both();
+  for (let i = 0; i < 40; i++) stepGame(g, DT, []);
+  const v = { ...g.phys.hero.velocity };
+  assert.ok(release(g.phys, g.player, 'L'));
+  assert.deepEqual({ ...g.phys.hero.velocity }, v);
+  for (let i = 0; i < 10; i++) stepGame(g, DT, []);
+  const v2 = { ...g.phys.hero.velocity };
+  assert.ok(release(g.phys, g.player, 'R'));
+  assert.deepEqual({ ...g.phys.hero.velocity }, v2);
+  // and in the game: after the last rope goes, only gravity and drag act for the frame
+  const k = both(2);
+  for (let i = 0; i < 40; i++) stepGame(k, DT, []);
+  const u = { ...k.player.vel };
+  stepGame(k, DT, [REL_L, REL_R]);
+  const drag = CFG.airDrag * speed(u) ** 2 * DT;
+  assert.ok(Math.abs(k.player.vel.y - (u.y - CFG.gravity * DT)) <= drag + 0.02);
+  assert.ok(Math.abs(k.player.vel.z - u.z) <= drag + 0.02);
+});
+
+test('dual: pressing Q again while L is held replaces only L', () => {
+  const g = both();
+  const rAnchor = g.player.ropes.find((x) => x.slot === 'R').anchor, lAnchor = g.player.ropes.find((x) => x.slot === 'L').anchor;
+  stepGame(g, DT, [shot('L', 'lo')]);
+  fly(g);
+  const l = g.player.ropes.find((x) => x.slot === 'L'), r = g.player.ropes.find((x) => x.slot === 'R');
+  assert.ok(l.anchor !== lAnchor && l.anchor.y < lAnchor.y, 'L re-aimed low');
+  assert.equal(r.anchor, rAnchor, 'R untouched');
+  assert.equal(g.phys.world.constraints.length, 2);
+  assert.equal(g.player.anchor, l.anchor, 'anchor = the most recent rope');
+});
+
+test('dual: death releases both ropes', () => {
+  const g = both();
+  g.phys.hero.position.y = CFG.heroRadius; // dropped onto the street, both ropes slack (else they would hold him up)
+  g.phys.hero.velocity.set(0, -5, 0);
+  for (const r of g.phys.ropes.active()) r.len = 1e3;
+  const ev = stepGame(g, DT, []);
+  assert.ok(ev.includes('dead'));
+  assert.equal(g.phys.world.constraints.length, 0);
+  assert.equal(slots(g), '');
+  assert.equal(g.web, null);
+});
+
+test('dual: zip pulls along the summed rope direction and lets go of both', () => {
+  const g = both();
+  for (let i = 0; i < 20; i++) stepGame(g, DT, []);
+  const u = g.player.ropes.map((r) => {
+    const d = { x: r.anchor.x - g.player.pos.x, y: r.anchor.y - g.player.pos.y, z: r.anchor.z - g.player.pos.z }, n = Math.hypot(d.x, d.y, d.z);
+    return { x: d.x / n, y: d.y / n, z: d.z / n };
+  }).reduce((a, b) => ({ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }));
+  const v0 = { ...g.phys.hero.velocity };
+  setZip(g.phys, true);
+  const dv = { x: g.phys.hero.velocity.x - v0.x, y: g.phys.hero.velocity.y - v0.y, z: g.phys.hero.velocity.z - v0.z };
+  const n = Math.hypot(u.x, u.y, u.z), m = Math.hypot(dv.x, dv.y, dv.z);
+  assert.ok(m > 1, 'the snap kicks');
+  assert.ok((dv.x * u.x + dv.y * u.y + dv.z * u.z) / (n * m) > 0.999, 'the kick is along the sum of the unit vectors');
+  let zipped = false;
+  for (let i = 0; i < 300 && !zipped; i++) zipped = stepGame(g, DT, []).includes('zipped');
+  assert.ok(zipped);
+  assert.equal(g.phys.world.constraints.length, 0);
+});
+
+test('dual bot (?dualrope): no teleport, never inside a structure, holds two ropes at times', () => {
+  let dualFrames = 0;
+  for (let seed = 201; seed <= 206; seed++) {
+    const g = createGame(seed), bot = createBot({ dual: true });
+    for (let t = 0; t < 30 && g.player.alive; t += DT) {
+      const p = g.player, prev = { ...p.pos }, v0 = speed(p.vel);
+      stepGame(g, DT, bot(g, DT));
+      const step = Math.hypot(p.pos.x - prev.x, p.pos.y - prev.y, p.pos.z - prev.z);
+      assert.ok(step <= (Math.max(v0, speed(p.vel)) + CFG.gravity * DT) * DT + 1e-6, `seed ${seed} t=${t.toFixed(2)}: teleport ${step}`);
+      for (const s of g.world.structures) {
+        const inside = ['x', 'y', 'z'].every((k) => p.pos[k] > s.min[k] && p.pos[k] < s.max[k]);
+        assert.ok(!inside, `seed ${seed} t=${t.toFixed(2)}: inside ${s.id}`);
+      }
+      if (p.ropes.length === 2) dualFrames++;
+    }
+  }
+  assert.ok(dualFrames > 300, `two ropes held for only ${dualFrames} frames`);
 });
 
 test('a miss shows a missLine that expires after missShowSec', () => {

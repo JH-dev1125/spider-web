@@ -82,12 +82,12 @@ test('controller: hand lost longer than handLostMs releases, short gap does not'
   assert.equal(shots.length, 0);
   t = feed(ctrl, [], 12, t); // 0.4 s gap
   assert.equal(tr.state(t), null);
-  assert.deepEqual(shots, [{ type: 'release' }]); // the rope does not stay stuck
+  assert.deepEqual(shots.map((s) => [s.type, s.side]), [['release', 'R']]); // its rope does not stay stuck
   feed(ctrl, [hand(0.5, 0.5, OPEN)], 3, t);
   assert.equal(shots.length, 1);
 });
 
-test('controller: two hands, the one that entered the charge most recently owns the aim', () => {
+test('controller: two hands in the pose hold two ropes (left half = L, right half = R); each releases its own', () => {
   const tr = createChargeTracker();
   const shots = [], presses = [];
   const ctrl = createHandController(tr, { onShot: (s) => { if (s.type === 'release') shots.push(s); else presses.push(s); } });
@@ -95,12 +95,30 @@ test('controller: two hands, the one that entered the charge most recently owns 
   let t = feed(ctrl, [L(SHOOT), R(FIST)], 3, 0);
   assert.equal(tr.state(t).side, 'L');
   t = feed(ctrl, [R(SHOOT), L(SHOOT)], 3, t); // order swapped: matching is by position, not index
-  assert.deepEqual([tr.state(t).side, tr.state(t).level], ['R', 'lo']);
-  t = feed(ctrl, [L(OPEN), R(SHOOT)], 3, t); // the superseded hand letting go does nothing
-  assert.equal(shots.length, 0);
+  assert.deepEqual(presses.map((p) => [p.side, p.level]), [['L', 'mid'], ['R', 'lo']]);
+  assert.ok(tr.state(t, 'L') && tr.state(t, 'R'), 'both slots held');
+  t = feed(ctrl, [L(OPEN), R(SHOOT)], 3, t); // the left hand opens: only L lets go
+  assert.deepEqual(shots.map((s) => s.side), ['L']);
+  assert.ok(tr.state(t, 'R') && !tr.state(t, 'L'));
+  t = feed(ctrl, [L(SHOOT), R(SHOOT)], 3, t); // L again, R untouched
+  assert.deepEqual(presses.map((p) => p.side), ['L', 'R', 'L']);
   feed(ctrl, [L(OPEN), R(OPEN)], 3, t);
-  assert.equal(shots.length, 1);
-  assert.equal(shots[0].side, 'R');
+  assert.deepEqual(shots.map((s) => s.side).sort(), ['L', 'L', 'R']);
+  assert.equal(tr.state(t + 1), null);
+});
+
+test('controller: a second hand pressing an owned slot replaces it; the superseded hand letting go does nothing', () => {
+  const tr = createChargeTracker();
+  const shots = [], presses = [];
+  const ctrl = createHandController(tr, { onShot: (s) => { if (s.type === 'release') shots.push(s); else presses.push(s); } });
+  const A = (ext) => hand(0.1, 0.2, ext), B = (ext) => hand(0.4, 0.8, ext); // both on the left half
+  let t = feed(ctrl, [A(SHOOT), B(FIST)], 3, 0);
+  t = feed(ctrl, [A(SHOOT), B(SHOOT)], 3, t);
+  assert.deepEqual(presses.map((p) => [p.side, p.level]), [['L', 'hi'], ['L', 'lo']]);
+  t = feed(ctrl, [A(OPEN), B(SHOOT)], 3, t);
+  assert.equal(shots.length, 0);
+  feed(ctrl, [A(OPEN), B(OPEN)], 3, t);
+  assert.deepEqual(shots.map((s) => [s.side, s.level]), [['L', 'lo']]);
 });
 
 test('controller: fist mode charges on fist, open releases; status reports open palm', () => {
@@ -145,7 +163,7 @@ test('controller: a hand far away does not inherit the hold of one that just van
   assert.equal(shots.length, 0);
   t = feed(ctrl, [hand(0.8, 0.5, OPEN)], 10, t); // past handLostMs: the vanished hand's rope is released
   assert.equal(tr.state(t), null);
-  assert.deepEqual(shots, [{ type: 'release' }]);
+  assert.deepEqual(shots.map((s) => [s.type, s.side]), [['release', 'L']]);
   // a hand moving a normal amount between frames keeps its identity
   t = feed(ctrl, [hand(0.5, 0.5, SHOOT)], 3, t);
   t = feed(ctrl, [hand(0.55, 0.5, SHOOT)], 1, t);

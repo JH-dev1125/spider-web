@@ -1,7 +1,8 @@
 import { CFG } from './config.js';
 
-// onShot(action) is optional: {type:'press', side, level} on keydown (fire at once),
-// {type:'release', ...shot} on keyup of the active aim key, {type:'release'} on blur (let go of the rope),
+// onShot(action) is optional: {type:'press', side, level} on keydown (fire at once; each side holds its own key,
+// so Q and E held together are two presses), {type:'release', side, level, heldSec} on keyup of that side's current
+// key (lets go of that side's rope only), {type:'release'} without a side on blur (lets go of every rope),
 // {type:'zip'} / {type:'zipEnd'} on keydown / keyup of CFG.zipKey (main.js drops them outside play, where Space starts).
 export function attachKeyboard(target, tracker, now, onShot = () => {}) {
   const down = (e) => {

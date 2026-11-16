@@ -447,6 +447,9 @@ export function createRenderer(canvas) {
   const splat = new THREE.Mesh(new THREE.PlaneGeometry(R.splatSize, R.splatSize),
     new THREE.MeshBasicMaterial({ map: splatTexture(), transparent: true, depthWrite: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }));
   scene.add(splat);
+  // the second held rope (two ropes at once): its own strand and splat, from the other hand
+  const rope2 = strand(1), splat2 = splat.clone(), normal2 = new THREE.Vector3();
+  scene.add(splat2);
   let anchorKey = '', flashAge = 1;
   const normal = new THREE.Vector3(), FORWARD = new THREE.Vector3(0, 0, 1);
 
@@ -465,6 +468,7 @@ export function createRenderer(canvas) {
 
   let cam = null;
   const vPos = new THREE.Vector3(), vVel = new THREE.Vector3(), vAnchor = new THREE.Vector3(), vAim = new THREE.Vector3(), vHand = new THREE.Vector3();
+  const vAnchor2 = new THREE.Vector3(), vHand2 = new THREE.Vector3();
 
   function render(view, dt) {
     const p = view.player;
@@ -490,7 +494,17 @@ export function createRenderer(canvas) {
     set3(vPos, p.pos); set3(vVel, p.vel);
     const anchor = p.anchor ? set3(vAnchor, p.anchor) : null;
     const aimAt = web ? set3(vAim, web.to) : view.missLine ? set3(vAim, view.missLine.to) : null;
-    hero.update(view.pose, view.t, dt, vPos, vVel, anchor, aimAt, vHand, p.wall || (view.pose === 'wallrun' ? -1 : 0)); // ?debugPose=wallrun: a right wall
+    // every held rope: p.anchor is the most recent one (the web arm); any other goes to the free arm
+    const second = (p.ropes ?? []).find((r) => r.anchor !== p.anchor);
+    const anchor2 = second ? set3(vAnchor2, second.anchor) : null;
+    hero.update(view.pose, view.t, dt, vPos, vVel, anchor, aimAt, vHand, p.wall || (view.pose === 'wallrun' ? -1 : 0), anchor2, vHand2); // ?debugPose=wallrun: a right wall
+    rope2.visible = splat2.visible = !!anchor2;
+    if (anchor2) {
+      segment(rope2, vHand2, anchor2);
+      set3(normal2, surfaceNormal(second.anchor, view.structures));
+      splat2.quaternion.setFromUnitVectors(FORWARD, normal2);
+      splat2.position.copy(anchor2).addScaledVector(normal2, 0.035);
+    }
 
     rope.visible = splat.visible = !!anchor;
     const key = p.anchor ? `${p.anchor.x},${p.anchor.y},${p.anchor.z}` : '';
