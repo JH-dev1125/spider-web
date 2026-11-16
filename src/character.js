@@ -3,9 +3,49 @@ import { ANATOMY } from './ragdoll.js';
 import { CFG } from './config.js';
 const TAU = Math.PI * 2;
 
+// Quaternions as [x, y, z, w] arrays (the surface is built without Three or Cannon).
+const qmul = (a, b) => [a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1], a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+  a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3], a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2]];
+const qrot = (q, v) => qmul(qmul(q, [...v, 0]), [-q[0], -q[1], -q[2], q[3]]).slice(0, 3);
+const qinv = (q) => [-q[0], -q[1], -q[2], q[3]];
+const qz = (a) => [0, 0, Math.sin(a / 2), Math.cos(a / 2)];
+const vadd = (a, b) => a.map((v, k) => v + b[k]), vsub = (a, b) => a.map((v, k) => v - b[k]);
+export const PARENT_OF = Object.fromEntries(ANATOMY.map((a) => [a.name, a.parent || null]));
+
+// The bind pose the surface is modelled in: the ragdoll's rest skeleton (the same joint pivots and segment offsets the
+// physics uses), with the arms swung out 1.3 rad and the legs 0.26 rad (near a T-pose: the middle of the arms' range, so the shoulder skin stretches least), so no limb surface ever touches a
+// part it is not jointed to. {name: {pos, q}} in physics coordinates (y up, +z forward).
+export const ARM_OUT = 1.3, LEG_OUT = .26;
+export function bindPose() {
+  const out = {};
+  for (const a of ANATOMY) {
+    const sd = a.name.endsWith('L') ? -1 : 1;
+    const local = a.name.startsWith('upperArm') ? qz(sd * ARM_OUT) : a.name.startsWith('thigh') ? qz(sd * LEG_OUT) : [0, 0, 0, 1];
+    if (!a.parent) { out[a.name] = { pos: a.at.slice(), q: local }; continue; }
+    const P = out[a.parent], pa = ANATOMY.find((x) => x.name === a.parent).at, q = qmul(P.q, local);
+    out[a.name] = { pos: vadd(vadd(P.pos, qrot(P.q, vsub(a.joint, pa))), qrot(q, vsub(a.at, a.joint))), q };
+  }
+  return out;
+}
+
+// Skin a bind-space point (physics coordinates) with per-part rigid transforms {name: {pos, q}} and its weights.
+export function skinPoint(bind, pose, v, idx, w) {
+  const out = [0, 0, 0];
+  for (let k = 0; k < 4; k++) {
+    if (!w[k]) continue;
+    const n = ANATOMY[idx[k]].name, B = bind[n], P = pose[n];
+    const r = vadd(P.pos, qrot(P.q, qrot(qinv(B.q), vsub(v, B.pos))));
+    for (let i = 0; i < 3; i++) out[i] += w[k] * r[i];
+  }
+  return out;
+}
+
 // Smooth ellipsoid union sampled once at load; no model assets and no per-frame surface generation.
+// Jointed neighbours blend smoothly (the shoulder, elbow, knee); other parts union hard, so they never web together.
+// Each vertex is weighted to its own part and its parent, blended toward the joint.
 export function skinSurface(step = .022) {
-  const min = [-.34, -1.06, -.19], max = [.34, .9, .24];
+  const bind = bindPose(), local = ANATOMY.map((a) => bind[a.name]);
+  const min = [-1.02, -1.06, -.2], max = [1.02, .9, .25];
   const dims = max.map((v, k) => Math.ceil((v - min[k]) / step) + 1);
   const [nx, ny, nz] = dims, points = [], field = [];
   const distance = (p, a) => {
@@ -14,7 +54,8 @@ export function skinSurface(step = .022) {
     if (a.name === 'chest') d[0] /= .78 + .22 * Math.max(0, Math.min(1, (p[1] - .08) / .28));
     if (/upperArm|forearm|thigh|shin/.test(a.name)) {
       const radius = r[0], half = Math.max(0, r[1] - radius);
-      const y = Math.max(-half, Math.min(half, d[1]));
+      // the upper arm's capsule runs on into the shoulder (a deltoid): in any arm pose it stays joined to the chest
+      const y = Math.max(-half, Math.min(half + (a.name.startsWith('upperArm') ? .035 : 0), d[1]));
       const taper = 1 + .12 * d[1] / r[1];
       return Math.hypot(d[0], d[1] - y, d[2] * r[0] / r[2]) - radius * taper;
     }
@@ -22,32 +63,39 @@ export function skinSurface(step = .022) {
     const k1 = Math.hypot(...d.map((v, k) => v / (r[k] * r[k])));
     return k0 * (k0 - 1) / (k1 || 1);
   };
+  // a bind-space point in part k's rest frame (where the part sits at a.at, axis-aligned)
+  const toRest = (p, k) => vadd(qrot(qinv(local[k].q), vsub(p, local[k].pos)), ANATOMY[k].at);
+  const parts = (p) => ANATOMY.map((a, k) => distance(toRest(p, k), a));
+  const PAIRS = ANATOMY.flatMap((a, k) => a.parent ? [[k, ANATOMY.findIndex((x) => x.name === a.parent)]] : []);
+  const smin = (a, b, k) => { const h = Math.max(k - Math.abs(a - b), 0) / k; return Math.min(a, b) - h * h * k * .25; };
+  const blendOf = PAIRS.map(([i]) => ANATOMY[i].name.startsWith('upperArm') ? .1 : .05); // the shoulder: a wider web
   for (let z = 0; z < nz; z++) for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) {
     const p = [min[0] + x * step, min[1] + y * step, min[2] + z * step]; points.push(p);
-    let d = 100;
-    for (const a of ANATOMY) {
-      const v = distance(p, a), h = Math.max(.045 - Math.abs(d - v), 0) / .045;
-      d = Math.min(d, v) - h * h * .045 * .25;
-    }
+    const v = parts(p);
+    let d = Math.min(...v);
+    PAIRS.forEach(([i, j], k) => { d = Math.min(d, smin(v[i], v[j], blendOf[k])); });
     field.push(d);
   }
-  const positions = [], indices = [], skinIndices = [], weights = [], uvs = [], edges = new Map();
+  const positions = [], bindPositions = [], indices = [], skinIndices = [], weights = [], uvs = [], edges = new Map();
+  const JOINT = .25, HIP = .32; // m of distance difference over which a vertex hands over to its jointed neighbour
   const edge = (i, j) => {
     const key = i < j ? i * points.length + j : j * points.length + i;
     if (edges.has(key)) return edges.get(key);
     const t = field[i] / (field[i] - field[j]);
     const p = points[i].map((v, k) => v + (points[j][k] - v) * t), id = positions.length / 3;
-    positions.push(p[0], p[1], -p[2]);
-    const nearest = ANATOMY.map((a, k) => ({ k, d: Math.abs(distance(p, a)) })).sort((a, b) => a.d - b.d);
-    const primary = nearest[0], a = ANATOMY[primary.k];
-    // Blend only the anatomical parent/child at joints, so neighbouring legs never share weights.
-    const related = nearest.filter(n => n.k === primary.k || ANATOMY[n.k].parent === a.name || a.parent === ANATOMY[n.k].name).slice(0, 4);
-    const w = related.map(n => Math.exp(-(n.d - primary.d) * 65)), sum = w.reduce((s, v) => s + v, 0);
-    for (let k = 0; k < 4; k++) { skinIndices.push(related[k]?.k || 0); weights.push((w[k] || 0) / sum); }
-    let u = Math.atan2((p[0] - a.at[0]) / a.size[0], (p[2] - a.at[2]) / a.size[2]) / TAU;
+    positions.push(p[0], p[1], -p[2]); bindPositions.push(...p);
+    const v = parts(p).map(Math.abs);
+    const primary = v.indexOf(Math.min(...v)), a = ANATOMY[primary];
+    // the parent takes over toward the joint (weight 1 where the parent's own surface begins: continuous there)
+    const other = a.parent ? ANATOMY.findIndex((x) => x.name === a.parent) : -1;
+    const u0 = other < 0 ? 1 : Math.max(0, Math.min(1, (v[other] - v[primary]) / (/thigh|upperArm/.test(a.name) ? HIP : JOINT)));
+    const wo = (1 - u0) * (1 - u0);
+    skinIndices.push(primary, Math.max(other, 0), 0, 0); weights.push(1 - wo, wo, 0, 0);
+    const q = toRest(p, primary);
+    let u = Math.atan2((q[0] - a.at[0]) / a.size[0], (q[2] - a.at[2]) / a.size[2]) / TAU;
     if (u < 0) u += 1;
-    const v = Math.max(.015, Math.min(.985, .5 + (p[1] - a.at[1]) / (2 * a.size[1])));
-    uvs.push(u, (primary.k + v) / 16);
+    const vv = Math.max(.015, Math.min(.985, .5 + (q[1] - a.at[1]) / (2 * a.size[1])));
+    uvs.push(u, (primary + vv) / 16);
     edges.set(key, id); return id;
   };
   const tetra = [[0, 5, 1, 6], [0, 1, 2, 6], [0, 2, 3, 6], [0, 3, 7, 6], [0, 7, 4, 6], [0, 4, 5, 6]];
@@ -74,7 +122,7 @@ export function skinSurface(step = .022) {
       }
     }
   }
-  return { positions, indices, skinIndices, weights, uvs };
+  return { positions, bindPositions, bind, indices, skinIndices, weights, uvs };
 }
 
 function suitTexture(THREE) {
@@ -143,7 +191,7 @@ export function createHero(THREE) {
     bones[i].position.set(a.at[0] - origin[0], a.at[1] - origin[1], -(a.at[2] - origin[2]));
     if (parent < 0) mesh.add(bones[i]); else bones[parent].add(bones[i]);
   });
-  mesh.updateMatrixWorld(true); mesh.bind(new THREE.Skeleton(bones));
+  mesh.updateMatrixWorld(true);
   const wp = new THREE.Vector3(), wq = new THREE.Quaternion(), parentQ = new THREE.Quaternion();
   function update(p, out, castSide) {
     ANATOMY.forEach((a, i) => {
@@ -160,5 +208,10 @@ export function createHero(THREE) {
     const hand = p.ragdoll['hand' + (castSide || p.webSide)];
     return out.set(hand.position.x, hand.position.y, -hand.position.z);
   }
+  // Bind at the surface's own pose (bindPose), so the inverse bind matrices match the vertices exactly.
+  const rest = Object.fromEntries(Object.entries(data.bind).map(([n, B]) => [n, {
+    position: { x: B.pos[0], y: B.pos[1], z: B.pos[2] }, quaternion: { x: B.q[0], y: B.q[1], z: B.q[2], w: B.q[3] } }]));
+  update({ ragdoll: rest, webSide: 'R' }, new THREE.Vector3());
+  mesh.updateMatrixWorld(true); mesh.bind(new THREE.Skeleton(bones));
   return { root: mesh, update, skeleton: mesh.skeleton };
 }
